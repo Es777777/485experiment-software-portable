@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.py[cod]
+scripts/__pycache__/
+
+# Build artifacts
+build/
+dist/
+
+# Runtime output
+logs/*
+!logs/.gitkeep
+output/*
+!output/.gitkeep
+videos/*
+!videos/.gitkeep
+config/logs/
+
+# Temporary files
+*.tmp.xlsx
+*.zip
+.DS_Store
+Thumbs.db

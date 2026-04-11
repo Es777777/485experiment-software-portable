@@ -1,0 +1,16 @@
+{
+  "port": "COM3",
+  "baudrate": 115200,
+  "bytesize": 8,
+  "parity": "N",
+  "stopbits": 1,
+  "timeout": 1.0,
+  "read_mode": "chunk",
+  "chunk_size": 256,
+  "idle_sleep_seconds": 0.2,
+  "workbook_path": "logs/485_raw_data.xlsx",
+  "sheet_name": "raw_data",
+  "timestamp_format": "%Y-%m-%d %H:%M:%S",
+  "encoding": "utf-8",
+  "decode_errors": "replace"
+}
