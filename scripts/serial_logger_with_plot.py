@@ -9,18 +9,21 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import struct
 import sys
 import time
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 import matplotlib
-matplotlib.use("TkAgg")
-import matplotlib.pyplot as plt
+
+matplotlib.use(os.environ.get("SERIAL_LOGGER_MPL_BACKEND", "TkAgg"))
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Button
 
 try:
     import serial  # type: ignore
@@ -54,6 +57,8 @@ MODBUS_EXCEPTION_CODES = {
     8: "Memory parity error", 10: "Gateway path unavailable",
     11: "Gateway target failed to respond",
 }
+
+TOTAL_FORCE_NAME = "total_force"
 
 
 @dataclass(frozen=True)
@@ -210,6 +215,117 @@ def decode_value(field: FieldConfig, registers: Sequence[int]) -> Any:
     return value
 
 
+def floor_to_second(ts: datetime) -> datetime:
+    return ts.replace(microsecond=0)
+
+
+def previous_complete_second(ts: datetime) -> datetime:
+    return floor_to_second(ts) - timedelta(seconds=1)
+
+
+def compute_total_force(
+    values: Dict[str, float],
+    channel_names: Sequence[str],
+) -> Optional[float]:
+    if any(name not in values for name in channel_names):
+        return None
+    return sum(values[name] for name in channel_names)
+
+
+def record_second_bucket(
+    buckets: Dict[datetime, Dict[str, List[float]]],
+    ts: datetime,
+    values: Dict[str, Optional[float]],
+) -> None:
+    second_key = floor_to_second(ts)
+    for name, value in values.items():
+        if value is None:
+            continue
+        bucket = buckets.setdefault(second_key, {})
+        bucket.setdefault(name, []).append(value)
+
+
+def compute_previous_second_averages(
+    buckets: Dict[datetime, Dict[str, List[float]]],
+    now: datetime,
+) -> Tuple[Optional[datetime], Dict[str, float]]:
+    second_key = previous_complete_second(now)
+    bucket = buckets.get(second_key)
+    if not bucket:
+        return None, {}
+
+    averages: Dict[str, float] = {}
+    for name, samples in bucket.items():
+        if samples:
+            averages[name] = sum(samples) / len(samples)
+    if not averages:
+        return None, {}
+    return second_key, averages
+
+
+def build_manual_tare_offsets(
+    last_raw_values: Dict[str, float],
+    channel_names: Sequence[str],
+) -> Dict[str, float]:
+    return {
+        name: last_raw_values[name]
+        for name in channel_names
+        if name in last_raw_values
+    }
+
+
+def prepare_plot_sample(
+    raw_values: Dict[str, float],
+    offsets: Dict[str, float],
+    channel_names: Sequence[str],
+) -> Dict[str, Optional[float]]:
+    sample: Dict[str, Optional[float]] = {}
+    zeroed_values: Dict[str, float] = {}
+
+    for name in channel_names:
+        if name in raw_values:
+            zeroed = raw_values[name] - offsets.get(name, 0.0)
+            sample[name] = zeroed
+            zeroed_values[name] = zeroed
+        else:
+            sample[name] = None
+
+    sample[TOTAL_FORCE_NAME] = compute_total_force(zeroed_values, channel_names)
+    return sample
+
+
+def append_series_snapshot(
+    history: Dict[str, List[float]],
+    series_names: Sequence[str],
+    sample: Dict[str, Optional[float]],
+) -> None:
+    for name in series_names:
+        value = sample.get(name)
+        series = history.setdefault(name, [])
+        series.append(float("nan") if value is None else value)
+
+
+def format_previous_second_title(
+    second_ts: Optional[datetime],
+    averages: Dict[str, float],
+    series_names: Sequence[str],
+    tare_message: Optional[str],
+) -> str:
+    parts: List[str] = []
+    if tare_message:
+        parts.append(tare_message)
+
+    if second_ts is None or not averages:
+        parts.append("等待上一秒统计")
+        return " | ".join(parts)
+
+    parts.append("上一秒均值 {0}".format(second_ts.strftime("%H:%M:%S")))
+    for name in series_names:
+        if name in averages:
+            parts.append("{0}={1:.2f}".format(name, averages[name]))
+    return " | ".join(parts)
+
+
 class ExcelLogger:
     def __init__(self, workbook_path: Path, sheet_name: str, field_names: Sequence[str],
                  autosave_every_rows: int, autosave_interval_seconds: float) -> None:
@@ -299,8 +415,17 @@ class ExcelLogger:
 class LivePlotter:
     COLORS = ["b", "r", "g", "m", "c", "y"]
 
-    def __init__(self, channel_names: List[str], window_seconds: int = 60, smooth: bool = False, calc_window: int = 10, tare_seconds: float = 2.0) -> None:
+    def __init__(
+        self,
+        channel_names: List[str],
+        window_seconds: int = 60,
+        smooth: bool = False,
+        calc_window: int = 10,
+        tare_seconds: float = 2.0,
+    ) -> None:
         self.channel_names = channel_names
+        self.total_force_name = TOTAL_FORCE_NAME
+        self.plot_series_names = list(channel_names) + [self.total_force_name]
         self.window_seconds = window_seconds
         self.calc_window = calc_window
         self.smooth = smooth
@@ -309,24 +434,34 @@ class LivePlotter:
         self.tare_done = False
         self.tare_start: Optional[datetime] = None
         self.tare_buffer: Dict[str, List[float]] = {name: [] for name in channel_names}
+        self.last_raw_values: Dict[str, float] = {}
+        self.last_tare_message: Optional[str] = None
+        self.last_tare_message_until: float = 0.0
+        self.second_buckets: Dict[datetime, Dict[str, List[float]]] = {}
+        self.last_sample_ts: Optional[datetime] = None
         self.all_times: List[datetime] = []
-        self.all_values: Dict[str, List[float]] = {name: [] for name in channel_names}
+        self.all_values: Dict[str, List[float]] = {
+            name: [] for name in self.plot_series_names
+        }
         self.raw_lines: Dict[str, Any] = {}
         self.smooth_lines: Dict[str, Any] = {}
-        self.wavg_lines: Dict[str, Any] = {}
-        self.savg_lines: Dict[str, Any] = {}
+        self.avg_lines: Dict[str, Any] = {}
 
         self.fig, self.ax = plt.subplots(figsize=(12, 6))
-        for i, name in enumerate(channel_names):
+        plt.subplots_adjust(top=0.86)
+
+        for i, name in enumerate(self.plot_series_names):
             color = self.COLORS[i % len(self.COLORS)]
             raw_line, = self.ax.plot([], [], color=color, linewidth=0.8, alpha=0.3, markersize=2)
             self.raw_lines[name] = raw_line
             smooth_line, = self.ax.plot([], [], color=color, linewidth=2.0, label=name)
             self.smooth_lines[name] = smooth_line
-            wavg_line, = self.ax.plot([], [], color=color, linestyle="--", linewidth=1.5, label="W-Avg {0}".format(name))
-            self.wavg_lines[name] = wavg_line
-            savg_line, = self.ax.plot([], [], color=color, linestyle=":", linewidth=1.5, label="S-Avg {0}".format(name))
-            self.savg_lines[name] = savg_line
+            avg_line, = self.ax.plot([], [], color=color, linestyle="--", linewidth=1.2, label="Avg {0}".format(name))
+            self.avg_lines[name] = avg_line
+
+        self.button_ax = self.fig.add_axes([0.84, 0.9, 0.12, 0.06])
+        self.tare_button = Button(self.button_ax, "去皮")
+        self.tare_button.on_clicked(self.request_manual_tare)
 
         self.ax.set_title("Taring... ({0:.1f}s remaining)".format(tare_seconds))
         self.ax.set_xlabel("Time")
@@ -337,6 +472,31 @@ class LivePlotter:
         self.fig.autofmt_xdate()
         plt.ion()
         plt.show(block=False)
+
+    def _set_tare_message(self, message: str) -> None:
+        self.last_tare_message = message
+        self.last_tare_message_until = time.monotonic() + 2.0
+
+    def _active_tare_message(self) -> Optional[str]:
+        if time.monotonic() <= self.last_tare_message_until:
+            return self.last_tare_message
+        return None
+
+    def request_manual_tare(self, _event: object | None = None) -> None:
+        if not self.last_raw_values:
+            self._set_tare_message("去皮失败：暂无有效数据")
+            return
+
+        if self.last_sample_ts is not None:
+            self.second_buckets.pop(floor_to_second(self.last_sample_ts), None)
+
+        self.offsets.update(
+            build_manual_tare_offsets(self.last_raw_values, self.channel_names)
+        )
+        self.tare_done = True
+        self.tare_start = None
+        self.tare_buffer = {name: [] for name in self.channel_names}
+        self._set_tare_message("已去皮 {0}".format(datetime.now().strftime("%H:%M:%S")))
 
     def _tare(self, ts: datetime, values: Dict[str, float]) -> bool:
         if self.tare_start is None:
@@ -355,99 +515,84 @@ class LivePlotter:
                 if buf:
                     self.offsets[name] = sum(buf) / len(buf)
             self.tare_done = True
+            self._set_tare_message("启动去皮完成")
             return True
         return False
 
-    def add_point(self, ts: datetime, values: Dict[str, float]) -> None:
-        if not self.tare_done:
-            if self._tare(ts, values):
-                pass
-            return
-
-        zeroed = {}
-        for name in self.channel_names:
-            if name in values:
-                zeroed[name] = values[name] - self.offsets[name]
-
-        self.all_times.append(ts)
-        for name in self.channel_names:
-            if name in zeroed:
-                self.all_values[name].append(zeroed[name])
+    def _prune_history(self, ts: datetime) -> None:
         cutoff = ts.timestamp() - self.window_seconds
         while self.all_times and self.all_times[0].timestamp() < cutoff:
             self.all_times.pop(0)
-            for name in self.channel_names:
+            for name in self.plot_series_names:
                 if self.all_values[name]:
                     self.all_values[name].pop(0)
+
+        oldest_bucket = floor_to_second(ts) - timedelta(seconds=self.window_seconds + 2)
+        for bucket_ts in list(self.second_buckets):
+            if bucket_ts < oldest_bucket:
+                del self.second_buckets[bucket_ts]
+
+    def add_point(self, ts: datetime, values: Dict[str, float]) -> None:
+        self.last_raw_values = dict(values)
+        self.last_sample_ts = ts
+
+        if not self.tare_done:
+            self._tare(ts, values)
+            return
+
+        sample = prepare_plot_sample(values, self.offsets, self.channel_names)
+
+        self.all_times.append(ts)
+        append_series_snapshot(self.all_values, self.plot_series_names, sample)
+        record_second_bucket(self.second_buckets, ts, sample)
+        self._prune_history(ts)
         self._update()
 
-    def _calc_averages(self, name: str, now: datetime) -> Tuple[float, float, float]:
-        cutoff = now.timestamp() - self.calc_window
-        times = self.all_times
-        vals = self.all_values.get(name, [])
-
-        recent = [(t.timestamp(), v) for t, v in zip(times, vals) if t.timestamp() >= cutoff]
-        if not recent:
-            return 0.0, 0.0, 0.0
-
-        now_ts = now.timestamp()
-        weights = []
-        values = []
-        for t, v in recent:
-            age = now_ts - t
-            w = math.exp(-age / self.calc_window)
-            weights.append(w)
-            values.append(v)
-
-        total_w = sum(weights)
-        if total_w == 0:
-            return 0.0, 0.0, 0.0
-
-        weighted_avg = sum(w * v for w, v in zip(weights, values)) / total_w
-        weighted_var = sum(w * (v - weighted_avg) ** 2 for w, v in zip(weights, values)) / total_w
-        weighted_std = math.sqrt(weighted_var)
-
-        simple_avg = sum(values) / len(values)
-
-        return weighted_avg, simple_avg, weighted_std
+    def _build_smoothed_values(self, values: List[float]) -> List[float]:
+        if not HAS_NUMPY or len(values) <= 3 or any(math.isnan(v) for v in values):
+            return values
+        win = max(3, len(values) // 30)
+        kernel = np.ones(win) / win
+        padded = np.pad(values, (win // 2, win // 2), mode="edge")
+        return list(np.convolve(padded, kernel, mode="valid")[:len(values)])
 
     def _update(self) -> None:
         if not self.all_times:
             return
 
-        status_parts = []
         now = self.all_times[-1]
+        second_ts, averages = compute_previous_second_averages(self.second_buckets, now)
 
-        for name in self.channel_names:
+        for name in self.plot_series_names:
             vals = self.all_values.get(name, [])
             if not vals:
                 continue
 
             self.raw_lines[name].set_data(self.all_times, vals)
 
-            if HAS_NUMPY and len(vals) > 3:
-                win = max(3, len(vals) // 30)
-                kernel = np.ones(win) / win
-                padded = np.pad(vals, (win // 2, win // 2), mode="edge")
-                smoothed = list(np.convolve(padded, kernel, mode="valid")[:len(vals)])
+            if self.smooth:
+                smoothed = self._build_smoothed_values(vals)
                 self.smooth_lines[name].set_data(self.all_times, smoothed)
             else:
                 self.smooth_lines[name].set_data(self.all_times, vals)
 
-            w_avg, s_avg, w_std = self._calc_averages(name, now)
-
-            w_avg_vals = [w_avg] * len(self.all_times)
-            self.wavg_lines[name].set_data(self.all_times, w_avg_vals)
-
-            s_avg_vals = [s_avg] * len(self.all_times)
-            self.savg_lines[name].set_data(self.all_times, s_avg_vals)
-
-            status_parts.append("{0}: {1:.2f} ±{2:.2f}".format(name, s_avg, w_std))
+            if name in averages:
+                avg_vals = [averages[name]] * len(self.all_times)
+                self.avg_lines[name].set_data(self.all_times, avg_vals)
+            else:
+                self.avg_lines[name].set_data([], [])
 
         self.ax.relim()
         self.ax.autoscale_view()
         self.ax.set_xlim([self.all_times[0], self.all_times[-1]])
-        self.ax.set_title(" | ".join(status_parts))
+        self.ax.set_title(
+            format_previous_second_title(
+                second_ts,
+                averages,
+                self.plot_series_names,
+                self._active_tare_message(),
+            )
+        )
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 

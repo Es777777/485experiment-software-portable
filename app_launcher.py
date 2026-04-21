@@ -178,7 +178,7 @@ class ToolLauncherApp:
         ttk.Entry(live_row, textvariable=self.live_plot_window_var, width=8).pack(side="left", padx=(8, 16))
         ttk.Checkbutton(live_row, text="平滑曲线", variable=self.live_plot_smooth_var).pack(side="left")
 
-        ttk.Label(parent, text="“开始实时曲线采集”会打开独立曲线窗口，边采集边显示。").grid(
+        ttk.Label(parent, text="“开始实时曲线采集”会打开独立曲线窗口，支持测定过程中手动去皮，并显示合力曲线与上一秒平均值。").grid(
             row=4,
             column=1,
             sticky="w",
