@@ -1,6 +1,9 @@
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $buildRoot = Join-Path $projectRoot "build"
 $distRoot = Join-Path $projectRoot "dist"
+$releaseVersion = "v1.0.0"
+$releaseDate = Get-Date -Format "yyyyMMdd"
+$zipName = "485experiment-software-portable-$releaseVersion-$releaseDate.zip"
 
 Set-Location $projectRoot
 
@@ -34,3 +37,10 @@ Copy-Item -Path (Join-Path $projectRoot "config") -Destination (Join-Path $appDi
 Copy-Item -Path (Join-Path $projectRoot "README_portable.txt") -Destination (Join-Path $appDist.FullName "README.txt") -Force
 
 Write-Host "Portable release created at: $($appDist.FullName)"
+
+$zipPath = Join-Path $distRoot $zipName
+if (Test-Path $zipPath) {
+    Remove-Item $zipPath -Force
+}
+Compress-Archive -Path (Join-Path $appDist.FullName '*') -DestinationPath $zipPath
+Write-Host "Portable release zip created at: $zipPath"
