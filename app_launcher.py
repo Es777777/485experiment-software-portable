@@ -8,8 +8,8 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
-from typing import Callable, Sequence
+from tkinter import filedialog, font as tkfont, messagebox, ttk
+from typing import Callable, Mapping, Sequence
 
 from runtime_paths import ensure_runtime_directories, get_app_root
 
@@ -22,33 +22,107 @@ except ImportError:
 APP_TITLE = "实验软件便携版"
 
 
+def configure_text_streams() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+def build_child_process_environment(
+    base_env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    env = dict(os.environ if base_env is None else base_env)
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
+
+def select_preferred_port(
+    detected_ports: Sequence[str], configured_port: str
+) -> str:
+    ports = [port.strip() for port in detected_ports if port.strip()]
+    config_port = configured_port.strip()
+    config_upper = config_port.upper()
+    if config_upper:
+        for port in ports:
+            if port.upper() == config_upper:
+                return port
+    if ports:
+        return ports[0]
+    return config_port
+
+
+def configure_default_fonts(root: tk.Tk) -> None:
+    preferred_families = (
+        "Microsoft YaHei UI",
+        "Microsoft YaHei",
+        "SimSun",
+        "Arial Unicode MS",
+        "Arial",
+    )
+    try:
+        available_families = set(tkfont.families(root))
+    except tk.TclError:
+        return
+    family = next(
+        (name for name in preferred_families if name in available_families), None
+    )
+    if family is None:
+        return
+
+    for font_name in (
+        "TkDefaultFont",
+        "TkTextFont",
+        "TkMenuFont",
+        "TkHeadingFont",
+        "TkCaptionFont",
+        "TkSmallCaptionFont",
+        "TkIconFont",
+        "TkTooltipFont",
+    ):
+        try:
+            tkfont.nametofont(font_name).configure(family=family)
+        except tk.TclError:
+            pass
+
+
 def run_internal_tool(argv: Sequence[str]) -> int | None:
     if len(argv) < 3 or argv[1] != "__tool__":
         return None
 
+    configure_text_streams()
     tool_name = argv[2]
     tool_args = list(argv[3:])
 
-    if tool_name == "modbus":
-        from scripts import serial_excel_logger
+    try:
+        if tool_name == "modbus":
+            from scripts import serial_excel_logger
 
-        return serial_excel_logger.main(tool_args)
-    if tool_name == "liveplot":
-        from scripts import serial_logger_with_plot
+            return serial_excel_logger.main(tool_args)
+        if tool_name == "liveplot":
+            from scripts import serial_logger_with_plot
 
-        return serial_logger_with_plot.main(tool_args)
-    if tool_name == "raw":
-        from scripts import serial_raw_excel_logger
+            return serial_logger_with_plot.main(tool_args)
+        if tool_name == "raw":
+            from scripts import serial_raw_excel_logger
 
-        return serial_raw_excel_logger.main(tool_args)
-    if tool_name == "video":
-        import video_meter_to_excel
+            return serial_raw_excel_logger.main(tool_args)
+        if tool_name == "video":
+            import video_meter_to_excel
 
-        return video_meter_to_excel.main(tool_args)
-    if tool_name == "extract":
-        from scripts import extract_reliable_data
+            return video_meter_to_excel.main(tool_args)
+        if tool_name == "extract":
+            from scripts import extract_reliable_data
 
-        return extract_reliable_data.main(tool_args)
+            return extract_reliable_data.main(tool_args)
+    except Exception as exc:
+        print("工具运行失败: {0}".format(exc), file=sys.stderr)
+        return 1
 
     raise SystemExit("Unknown internal tool: {0}".format(tool_name))
 
@@ -61,6 +135,8 @@ class ToolLauncherApp:
         self.log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self.start_buttons: list[ttk.Button] = []
         self.stop_buttons: list[ttk.Button] = []
+        self.modbus_detected_ports: list[str] = []
+        self.raw_detected_ports: list[str] = []
         self.status_var = tk.StringVar(value="就绪")
 
         self.modbus_config_var = tk.StringVar(
@@ -96,8 +172,8 @@ class ToolLauncherApp:
         self._build_ui()
         self.refresh_serial_ports("modbus", log_results=False)
         self.refresh_serial_ports("raw", log_results=False)
-        self.use_config_port("modbus")
-        self.use_config_port("raw")
+        self.use_config_port("modbus", prefer_detected=True, log_results=False)
+        self.use_config_port("raw", prefer_detected=True, log_results=False)
         self.root.after(120, self._poll_log_queue)
 
     def _build_ui(self) -> None:
@@ -339,12 +415,12 @@ class ToolLauncherApp:
         combo = ttk.Combobox(row, textvariable=variable, width=24)
         combo.pack(side="left")
         ttk.Button(
-            row, text="Search COM", command=lambda: self.refresh_serial_ports(target)
+            row, text="搜索串口", command=lambda: self.refresh_serial_ports(target)
         ).pack(side="left", padx=(8, 0))
         ttk.Button(
-            row, text="Use config", command=lambda: self.use_config_port(target)
+            row, text="使用配置", command=lambda: self.use_config_port(target)
         ).pack(side="left", padx=(8, 0))
-        ttk.Button(row, text="Clear", command=lambda: variable.set("")).pack(
+        ttk.Button(row, text="清空", command=lambda: variable.set("")).pack(
             side="left", padx=(8, 0)
         )
         return combo
@@ -434,6 +510,15 @@ class ToolLauncherApp:
             return []
         return sorted((info.device for info in list_ports.comports()), key=str.upper)
 
+    def _set_detected_ports(self, target: str, ports: list[str]) -> None:
+        if target == "modbus":
+            self.modbus_detected_ports = ports
+        else:
+            self.raw_detected_ports = ports
+
+    def _detected_ports_for(self, target: str) -> list[str]:
+        return self.modbus_detected_ports if target == "modbus" else self.raw_detected_ports
+
     def _load_config_port(self, config_path: Path) -> str:
         try:
             payload = json.loads(config_path.read_text(encoding="utf-8"))
@@ -443,6 +528,7 @@ class ToolLauncherApp:
 
     def refresh_serial_ports(self, target: str, log_results: bool = True) -> None:
         ports = self._scan_serial_ports()
+        self._set_detected_ports(target, ports)
         combo = self.modbus_port_combo if target == "modbus" else self.raw_port_combo
         variable = self.modbus_port_var if target == "modbus" else self.raw_port_var
         current = variable.get().strip()
@@ -457,12 +543,17 @@ class ToolLauncherApp:
 
         if log_results:
             self._append_log(
-                "Available COM ports: {0}".format(", ".join(values))
+                "已检测到可用串口: {0}".format(", ".join(values))
                 if values
-                else "No available COM ports were found."
+                else "未检测到可用 COM 串口。"
             )
 
-    def use_config_port(self, target: str) -> None:
+    def use_config_port(
+        self,
+        target: str,
+        prefer_detected: bool = False,
+        log_results: bool = True,
+    ) -> None:
         config_var = (
             self.modbus_config_var if target == "modbus" else self.raw_config_var
         )
@@ -475,10 +566,63 @@ class ToolLauncherApp:
 
         port = self._load_config_port(config_path)
         if port:
-            port_var.set(port)
+            detected_ports = self._detected_ports_for(target)
+            selected_port = (
+                select_preferred_port(detected_ports, port)
+                if prefer_detected
+                else port
+            )
+            port_var.set(selected_port)
             current_values = list(combo["values"]) if combo is not None else []
-            if combo is not None and port not in current_values:
-                combo["values"] = [port] + current_values
+            if combo is not None and selected_port not in current_values:
+                combo["values"] = [selected_port] + current_values
+            if (
+                log_results
+                and detected_ports
+                and port.upper() not in {item.upper() for item in detected_ports}
+            ):
+                self._append_log(
+                    "配置文件中的串口 {0} 当前未检测到，已选择 {1}。".format(
+                        port, selected_port
+                    )
+                    if prefer_detected
+                    else "配置文件中的串口 {0} 当前未检测到，启动前请确认设备连接。".format(
+                        port
+                    )
+                )
+
+    def _resolve_port_override(self, target: str, config_path: Path) -> str | None:
+        self.refresh_serial_ports(target, log_results=False)
+        port_var = self.modbus_port_var if target == "modbus" else self.raw_port_var
+        selected_port = port_var.get().strip()
+        config_port = self._load_config_port(config_path)
+        effective_port = selected_port or config_port
+        detected_ports = self._detected_ports_for(target)
+
+        if not effective_port:
+            messagebox.showerror(
+                "串口未设置",
+                "未检测到可用 COM 串口，配置文件中也没有 port。请连接设备后点击“搜索串口”，或手动填写 COM 口。",
+            )
+            return None
+
+        detected_upper = {port.upper() for port in detected_ports}
+        if detected_ports and effective_port.upper() not in detected_upper:
+            messagebox.showerror(
+                "串口不可用",
+                "未检测到 {0}。\n当前可用串口: {1}\n\n请点击“搜索串口”选择实际连接设备的 COM 口，或确认驱动和连接线。".format(
+                    effective_port,
+                    ", ".join(detected_ports),
+                ),
+            )
+            self._append_log(
+                "串口不可用: 未检测到 {0}；当前可用串口: {1}".format(
+                    effective_port, ", ".join(detected_ports)
+                )
+            )
+            return None
+
+        return selected_port
 
     def _build_command(self, tool_name: str, extra_args: list[str]) -> list[str]:
         if getattr(sys, "frozen", False):
@@ -549,17 +693,27 @@ class ToolLauncherApp:
         self._append_log("命令: {0}".format(" ".join(command)))
 
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        self.process = subprocess.Popen(
-            command,
-            cwd=str(self.app_root),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-            creationflags=creationflags,
-        )
+        try:
+            self.process = subprocess.Popen(
+                command,
+                cwd=str(self.app_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                creationflags=creationflags,
+                env=build_child_process_environment(),
+            )
+        except OSError as exc:
+            self.status_var.set("{0} 启动失败".format(tool_label))
+            self._append_log("启动失败: {0}".format(exc))
+            messagebox.showerror(
+                "启动失败",
+                "{0} 无法启动。\n\n详细信息: {1}".format(tool_label, exc),
+            )
+            return
         self.status_var.set("{0} 运行中".format(tool_label))
         self._set_running_state(True)
 
@@ -576,7 +730,9 @@ class ToolLauncherApp:
             return
 
         args = ["--config", str(config_path)]
-        port = self.modbus_port_var.get().strip()
+        port = self._resolve_port_override("modbus", config_path)
+        if port is None:
+            return
         if port:
             args.extend(["--port", port])
         if self.modbus_once_var.get():
@@ -590,7 +746,9 @@ class ToolLauncherApp:
             return
 
         args = ["--config", str(config_path)]
-        port = self.modbus_port_var.get().strip()
+        port = self._resolve_port_override("modbus", config_path)
+        if port is None:
+            return
         if port:
             args.extend(["--port", port])
 
@@ -615,7 +773,9 @@ class ToolLauncherApp:
             return
 
         args = ["--config", str(config_path)]
-        port = self.raw_port_var.get().strip()
+        port = self._resolve_port_override("raw", config_path)
+        if port is None:
+            return
         if port:
             args.extend(["--port", port])
         if self.raw_once_var.get():
@@ -696,6 +856,7 @@ def main() -> int:
         return internal_result
 
     root = tk.Tk()
+    configure_default_fonts(root)
     style = ttk.Style()
     if "vista" in style.theme_names():
         style.theme_use("vista")

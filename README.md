@@ -39,6 +39,8 @@ py app_launcher.py
 - 便携版通过 GitHub Releases 分发
 - 最新版本会上传带版本号和日期的 zip 附件
 - 下载后解压即可运行，无需单独安装 Python
+- 当前首个正式发布版本：`v1.0.0`
+- 当前附件文件名：`485experiment-software-portable-v1.0.0-20260511.zip`
 
 如果你正在浏览仓库主页，请优先前往 Releases 页面获取最新发布包。
 
@@ -128,4 +130,5 @@ powershell -ExecutionPolicy Bypass -File .\build_release.ps1
 - 支持记录开始时间、结束时间和总电流
 - 支持区间平均合力统计与历史组显示
 - 支持导出带日期文件名的实验结果表
+- 修复部分电脑中文显示异常、实时曲线依赖缺失和串口不可用时的报错提示
 - 完善便携版目录结构和中文说明

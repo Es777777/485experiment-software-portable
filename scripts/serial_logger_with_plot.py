@@ -23,6 +23,15 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 import matplotlib
 
 matplotlib.use(os.environ.get("SERIAL_LOGGER_MPL_BACKEND", "TkAgg"))
+matplotlib.rcParams["font.sans-serif"] = [
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "SimHei",
+    "SimSun",
+    "Arial Unicode MS",
+    "DejaVu Sans",
+]
+matplotlib.rcParams["axes.unicode_minus"] = False
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Button
@@ -150,6 +159,24 @@ class AppConfig:
     autosave_every_rows: int
     autosave_interval_seconds: float
     fields: List[FieldConfig]
+
+
+def configure_text_streams() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+def ensure_dependencies() -> None:
+    if serial is None:
+        raise RuntimeError("缺少 pyserial 依赖，无法打开串口。")
+    if Workbook is None or load_workbook is None or get_column_letter is None:
+        raise RuntimeError("缺少 openpyxl 依赖，无法写入 Excel。")
 
 
 def load_config(config_path: Path) -> AppConfig:
@@ -1089,28 +1116,21 @@ def resolve_config_path(raw_path: str) -> Path:
     return (get_app_root() / path).resolve()
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-
-    config_path = resolve_config_path(args.config)
-    config = load_config(config_path)
-    if args.port:
-        config = replace(config, port=str(args.port).strip())
-
-    print("Connecting to {0}...".format(config.port))
-    print("Saving to: {0}".format(config.workbook_path))
+def create_serial_client(config: AppConfig):
+    assert serial is not None
     parity_map = {
         "N": serial.PARITY_NONE,
         "E": serial.PARITY_EVEN,
         "O": serial.PARITY_ODD,
+        "M": serial.PARITY_MARK,
+        "S": serial.PARITY_SPACE,
     }
     stopbits_map = {
         1.0: serial.STOPBITS_ONE,
         1.5: serial.STOPBITS_ONE_POINT_FIVE,
         2.0: serial.STOPBITS_TWO,
     }
-    client = serial.Serial(
+    return serial.Serial(
         port=config.port,
         baudrate=config.baudrate,
         bytesize=config.bytesize,
@@ -1118,23 +1138,57 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         stopbits=stopbits_map[config.stopbits],
         timeout=config.timeout,
     )
-    print("Connected.")
 
-    logger = ExcelLogger(
-        workbook_path=config.workbook_path,
-        sheet_name=config.sheet_name,
-        field_names=[f.name for f in config.fields],
-        autosave_every_rows=config.autosave_every_rows,
-        autosave_interval_seconds=config.autosave_interval_seconds,
-    )
 
-    plotter = LivePlotter(
-        channel_names=[f.name for f in config.fields],
-        window_seconds=args.plot_window,
-        smooth=args.smooth,
-    )
+def format_serial_open_error(port: str, exc: BaseException) -> str:
+    return (
+        "无法打开串口 {0}: {1}\n"
+        "请确认设备已连接、电源已打开、驱动已安装，并在主窗口点击“搜索串口”选择实际的 COM 口。"
+    ).format(port, exc)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    configure_text_streams()
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
     try:
+        ensure_dependencies()
+        config_path = resolve_config_path(args.config)
+        config = load_config(config_path)
+        if args.port:
+            config = replace(config, port=str(args.port).strip())
+    except Exception as exc:
+        print("实时曲线初始化失败: {0}".format(exc), file=sys.stderr)
+        return 1
+
+    print("正在连接串口 {0}...".format(config.port))
+    print("保存到: {0}".format(config.workbook_path))
+    try:
+        client = create_serial_client(config)
+    except Exception as exc:
+        print(format_serial_open_error(config.port, exc), file=sys.stderr)
+        return 1
+    print("Connected.")
+
+    logger: ExcelLogger | None = None
+    plotter: LivePlotter | None = None
+
+    try:
+        logger = ExcelLogger(
+            workbook_path=config.workbook_path,
+            sheet_name=config.sheet_name,
+            field_names=[f.name for f in config.fields],
+            autosave_every_rows=config.autosave_every_rows,
+            autosave_interval_seconds=config.autosave_interval_seconds,
+        )
+
+        plotter = LivePlotter(
+            channel_names=[f.name for f in config.fields],
+            window_seconds=args.plot_window,
+            smooth=args.smooth,
+        )
+
         while True:
             cycle_start = time.perf_counter()
             row_data = poll_once(client, config, logger)
@@ -1170,9 +1224,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     except KeyboardInterrupt:
         print("\nStopped by user.")
+    except Exception as exc:
+        print("实时曲线运行失败: {0}".format(exc), file=sys.stderr)
+        return 1
     finally:
-        logger.close()
-        plotter.close()
+        if logger is not None:
+            logger.close()
+        if plotter is not None:
+            plotter.close()
         client.close()
     return 0
 

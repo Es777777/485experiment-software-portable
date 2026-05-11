@@ -10,6 +10,14 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("485experiment-software-portable", script)
         self.assertIn("Compress-Archive", script)
 
+    def test_pyinstaller_spec_includes_live_plot_backend(self) -> None:
+        spec = Path("app_launcher.spec").read_text(encoding="utf-8")
+
+        self.assertIn("matplotlib.backends.backend_tkagg", spec)
+        self.assertIn("matplotlib.backends._backend_tk", spec)
+        self.assertIn('"matplotlib"', spec)
+        self.assertIn("collect_all(package_name)", spec)
+
     def test_release_artifact_note_exists(self) -> None:
         note = Path("docs/project-assets/release-artifacts.md").read_text(
             encoding="utf-8"
