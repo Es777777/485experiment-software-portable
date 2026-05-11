@@ -3,6 +3,8 @@ import os
 import tempfile
 import unittest
 from datetime import datetime
+from pathlib import Path
+from unittest import mock
 
 os.environ["SERIAL_LOGGER_MPL_BACKEND"] = "Agg"
 
@@ -386,6 +388,80 @@ class GroupedMeasurementHelperTests(unittest.TestCase):
         )
 
         self.assertEqual(export_path.name, "measurement_results_20260508_150405.xlsx")
+
+
+class ExcelLoggerPersistenceTests(unittest.TestCase):
+    def test_close_verifies_last_timestamp_was_saved(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook_path = Path(temp_dir) / "logger.xlsx"
+            logger = serial_logger_with_plot.ExcelLogger(
+                workbook_path=workbook_path,
+                sheet_name="data",
+                field_names=["weight_ch1", "weight_ch2", "weight_ch3"],
+                autosave_every_rows=10,
+                autosave_interval_seconds=60.0,
+            )
+
+            logger.append_row(
+                {
+                    "timestamp": "2026-05-11 17:00:00.123456",
+                    "unix_time": 1.0,
+                    "port": "COM4",
+                    "baudrate": 115200,
+                    "slave_id": 1,
+                    "status": "ok",
+                    "error": "",
+                    "raw_frames": "{}",
+                    "weight_ch1": 1.0,
+                    "weight_ch2": 2.0,
+                    "weight_ch3": 3.0,
+                }
+            )
+
+            logger.close()
+
+            self.assertEqual(
+                logger._read_last_saved_timestamp(),
+                "2026-05-11 17:00:00.123456",
+            )
+
+    def test_flush_keeps_pending_rows_when_save_verification_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook_path = Path(temp_dir) / "logger.xlsx"
+            logger = serial_logger_with_plot.ExcelLogger(
+                workbook_path=workbook_path,
+                sheet_name="data",
+                field_names=["weight_ch1", "weight_ch2", "weight_ch3"],
+                autosave_every_rows=10,
+                autosave_interval_seconds=60.0,
+            )
+
+            logger.append_row(
+                {
+                    "timestamp": "2026-05-11 17:00:01.123456",
+                    "unix_time": 2.0,
+                    "port": "COM4",
+                    "baudrate": 115200,
+                    "slave_id": 1,
+                    "status": "ok",
+                    "error": "",
+                    "raw_frames": "{}",
+                    "weight_ch1": 4.0,
+                    "weight_ch2": 5.0,
+                    "weight_ch3": 6.0,
+                }
+            )
+
+            with mock.patch.object(
+                logger,
+                "_verify_last_saved_timestamp",
+                side_effect=RuntimeError("verify failed"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "verify failed"):
+                    logger.flush()
+
+            self.assertEqual(len(logger.pending_rows), 1)
+            self.assertEqual(logger.unsaved_rows, 1)
 
 
 class LivePlotterGroupedMeasurementTests(unittest.TestCase):
