@@ -441,9 +441,9 @@ def start_measurement_group(
 ) -> ActiveMeasurementGroup:
     cleaned_pwm = pwm.strip()
     if not cleaned_pwm:
-        raise ValueError("PWM is required")
+        raise ValueError("请先输入 PWM")
     if state.current_group is not None:
-        raise ValueError("Measurement already in progress")
+        raise ValueError("当前分组尚未结束，请先点击“结束测量”")
     current_group = ActiveMeasurementGroup(
         pwm=cleaned_pwm, start_time=start_time, samples=[]
     )
@@ -474,11 +474,17 @@ def finish_measurement_group(
     end_time: datetime,
 ) -> MeasurementGroupResult:
     if state.current_group is None:
-        raise ValueError("Measurement has not started")
-    total_current = float(total_current_text.strip())
+        raise ValueError("请先点击“开始测量”")
+    cleaned_total_current = total_current_text.strip()
+    if not cleaned_total_current:
+        raise ValueError("请先输入总电流")
+    try:
+        total_current = float(cleaned_total_current)
+    except ValueError as exc:
+        raise ValueError("总电流必须是数字") from exc
     samples = list(state.current_group.samples)
     if not samples:
-        raise ValueError("No valid total force samples")
+        raise ValueError("当前分组内还没有有效合力数据，请先采到稳定数据后再结束测量")
     result = MeasurementGroupResult(
         index=len(state.completed_groups) + 1,
         pwm=state.current_group.pwm,
@@ -765,6 +771,8 @@ class LivePlotter:
         self.raw_lines: Dict[str, Any] = {}
         self.smooth_lines: Dict[str, Any] = {}
         self.avg_lines: Dict[str, Any] = {}
+        self.measurement_pwm_entry: Any = None
+        self.measurement_current_entry: Any = None
 
         self.fig, self.ax = plt.subplots(figsize=(12, 6))
         plt.subplots_adjust(top=0.86)
@@ -802,26 +810,48 @@ class LivePlotter:
         self.fig.autofmt_xdate()
         plt.ion()
         plt.show(block=False)
-        self.measurement_status_var = self._make_string_var("未开始")
-        self.measurement_pwm_var = self._make_string_var("")
-        self.measurement_current_var = self._make_string_var("")
-        self.measurement_summary_var = self._make_string_var("已完成组数: 0")
-        self.measurement_history_var = self._make_string_var("暂无已完成组")
+        self.measurement_var_master = None
+        self.measurement_status_var = SimpleStringVar("未开始")
+        self.measurement_pwm_var = SimpleStringVar("")
+        self.measurement_current_var = SimpleStringVar("")
+        self.measurement_summary_var = SimpleStringVar("已完成组数: 0")
+        self.measurement_history_var = SimpleStringVar("暂无已完成组")
         self._build_measurement_panel()
 
+    def _resolve_measurement_var_master(self) -> Any:
+        manager = getattr(self.fig.canvas, "manager", None)
+        window = getattr(manager, "window", None)
+        if isinstance(window, tk.Misc):
+            return window
+        return None
+
     def _make_string_var(self, value: str) -> Any:
-        try:
-            root = tk.Tk()
-            root.withdraw()
-        except tk.TclError:
-            return SimpleStringVar(value)
-        return tk.StringVar(master=root, value=value)
+        if self.measurement_var_master is not None:
+            return tk.StringVar(master=self.measurement_var_master, value=value)
+        return SimpleStringVar(value)
+
+    def _rebind_measurement_vars(self) -> None:
+        self.measurement_status_var = self._make_string_var(
+            self.measurement_status_var.get()
+        )
+        self.measurement_pwm_var = self._make_string_var(self.measurement_pwm_var.get())
+        self.measurement_current_var = self._make_string_var(
+            self.measurement_current_var.get()
+        )
+        self.measurement_summary_var = self._make_string_var(
+            self.measurement_summary_var.get()
+        )
+        self.measurement_history_var = self._make_string_var(
+            self.measurement_history_var.get()
+        )
 
     def _build_measurement_panel(self) -> None:
         manager = getattr(self.fig.canvas, "manager", None)
         window = getattr(manager, "window", None)
         if window is None:
             return
+        self.measurement_var_master = self._resolve_measurement_var_master()
+        self._rebind_measurement_vars()
 
         panel = ttk.LabelFrame(window, text="分组测量", padding=8)
         panel.pack(side="bottom", fill="x")
@@ -829,15 +859,17 @@ class LivePlotter:
         ttk.Label(panel, text="PWM").grid(
             row=0, column=0, padx=(0, 6), pady=4, sticky="w"
         )
-        ttk.Entry(panel, textvariable=self.measurement_pwm_var, width=12).grid(
-            row=0, column=1, pady=4, sticky="w"
+        self.measurement_pwm_entry = ttk.Entry(
+            panel, textvariable=self.measurement_pwm_var, width=12
         )
+        self.measurement_pwm_entry.grid(row=0, column=1, pady=4, sticky="w")
         ttk.Label(panel, text="总电流").grid(
             row=0, column=2, padx=(12, 6), pady=4, sticky="w"
         )
-        ttk.Entry(panel, textvariable=self.measurement_current_var, width=12).grid(
-            row=0, column=3, pady=4, sticky="w"
+        self.measurement_current_entry = ttk.Entry(
+            panel, textvariable=self.measurement_current_var, width=12
         )
+        self.measurement_current_entry.grid(row=0, column=3, pady=4, sticky="w")
 
         ttk.Button(panel, text="开始测量", command=self.start_measurement).grid(
             row=0, column=4, padx=(12, 4), pady=4
@@ -864,6 +896,24 @@ class LivePlotter:
             justify="left",
             anchor="w",
         ).grid(row=2, column=0, columnspan=8, sticky="ew", pady=(6, 0))
+        ttk.Label(
+            panel,
+            text="操作顺序：输入 PWM -> 点开始测量 -> 稳定后输入总电流 -> 点结束测量 -> 点下一组",
+            justify="left",
+            anchor="w",
+        ).grid(row=3, column=0, columnspan=8, sticky="w", pady=(6, 0))
+
+    def _read_entry_text(self, entry: Any, fallback_var: Any) -> str:
+        if entry is not None:
+            try:
+                value = entry.get()
+                if value is not None:
+                    text = str(value)
+                    fallback_var.set(text)
+                    return text
+            except Exception:
+                pass
+        return str(fallback_var.get())
 
     def _refresh_measurement_history(self) -> None:
         if not self.measurement_state.completed_groups:
@@ -1017,7 +1067,9 @@ class LivePlotter:
         try:
             start_measurement_group(
                 self.measurement_state,
-                self.measurement_pwm_var.get(),
+                self._read_entry_text(
+                    self.measurement_pwm_entry, self.measurement_pwm_var
+                ),
                 datetime.now(),
             )
         except ValueError as exc:
@@ -1027,7 +1079,9 @@ class LivePlotter:
         self.measurement_summary_var.set(
             "已完成组数: {0} | 当前 PWM={1}".format(
                 len(self.measurement_state.completed_groups),
-                self.measurement_pwm_var.get().strip(),
+                self._read_entry_text(
+                    self.measurement_pwm_entry, self.measurement_pwm_var
+                ).strip(),
             )
         )
 
@@ -1035,7 +1089,9 @@ class LivePlotter:
         try:
             result = finish_measurement_group(
                 self.measurement_state,
-                self.measurement_current_var.get(),
+                self._read_entry_text(
+                    self.measurement_current_entry, self.measurement_current_var
+                ),
                 datetime.now(),
             )
         except ValueError as exc:

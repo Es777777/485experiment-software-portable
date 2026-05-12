@@ -13,7 +13,7 @@ class ReadmeContentTests(unittest.TestCase):
         self.assertIn("## 从源码运行", readme)
         self.assertIn("v1.0.0", readme)
         self.assertIn("Releases", readme)
-        self.assertIn("485experiment-software-portable-v1.0.0-20260511.zip", readme)
+        self.assertIn("485experiment-software-portable-v1.0.0-20260512.zip", readme)
 
     def test_portable_readme_describes_grouped_measurement_steps(self) -> None:
         portable = Path("README_portable.txt").read_text(encoding="utf-8")

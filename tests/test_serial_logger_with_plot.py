@@ -296,7 +296,7 @@ class GroupedMeasurementHelperTests(unittest.TestCase):
             datetime(2026, 5, 8, 15, 1, 0),
         )
 
-        with self.assertRaisesRegex(ValueError, "No valid total force samples"):
+        with self.assertRaisesRegex(ValueError, "当前分组内还没有有效合力数据"):
             serial_logger_with_plot.finish_measurement_group(
                 state,
                 "1.20",
@@ -465,6 +465,25 @@ class ExcelLoggerPersistenceTests(unittest.TestCase):
 
 
 class LivePlotterGroupedMeasurementTests(unittest.TestCase):
+    def test_string_vars_use_existing_window_when_available(self) -> None:
+        plotter = serial_logger_with_plot.LivePlotter(
+            ["weight_ch1", "weight_ch2", "weight_ch3"],
+            window_seconds=60,
+            smooth=False,
+        )
+
+        try:
+            if hasattr(plotter.measurement_pwm_var, "_root"):
+                root_obj = plotter.measurement_pwm_var._root
+                if callable(root_obj):
+                    root_obj = root_obj()
+                self.assertEqual(
+                    root_obj,
+                    plotter.measurement_var_master,
+                )
+        finally:
+            plotter.close()
+
     def test_live_plotter_records_samples_only_while_group_is_active(self) -> None:
         plotter = serial_logger_with_plot.LivePlotter(
             ["weight_ch1", "weight_ch2", "weight_ch3"],

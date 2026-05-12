@@ -35,6 +35,7 @@ foreach ($folderName in @("logs", "output", "videos")) {
 
 Copy-Item -Path (Join-Path $projectRoot "config") -Destination (Join-Path $appDist.FullName "config") -Recurse -Force
 Copy-Item -Path (Join-Path $projectRoot "README_portable.txt") -Destination (Join-Path $appDist.FullName "README.txt") -Force
+Copy-Item -Path (Join-Path $projectRoot "docs\portable-grouped-measurement-guide.txt") -Destination (Join-Path $appDist.FullName "GROUPED_MEASUREMENT_GUIDE.txt") -Force
 
 Write-Host "Portable release created at: $($appDist.FullName)"
 

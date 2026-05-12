@@ -9,6 +9,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn('$releaseVersion = "v1.0.0"', script)
         self.assertIn("485experiment-software-portable", script)
         self.assertIn("Compress-Archive", script)
+        self.assertIn("GROUPED_MEASUREMENT_GUIDE.txt", script)
 
     def test_pyinstaller_spec_includes_live_plot_backend(self) -> None:
         spec = Path("app_launcher.spec").read_text(encoding="utf-8")

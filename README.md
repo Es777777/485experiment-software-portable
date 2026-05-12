@@ -40,7 +40,7 @@ py app_launcher.py
 - 最新版本会上传带版本号和日期的 zip 附件
 - 下载后解压即可运行，无需单独安装 Python
 - 当前首个正式发布版本：`v1.0.0`
-- 当前附件文件名：`485experiment-software-portable-v1.0.0-20260511.zip`
+- 当前附件文件名：`485experiment-software-portable-v1.0.0-20260512.zip`
 
 如果你正在浏览仓库主页，请优先前往 Releases 页面获取最新发布包。
 
