@@ -1,141 +1,134 @@
-# RS485 Excel Logger
+# 485 实验软件便携版
 
-This project includes two ways to save RS485 serial data into Excel:
+一个面向实验场景的 RS485/Modbus 桌面采集工具，支持实时曲线显示、手动去皮、PWM 分组测量、Excel 导出、视频回填和便携版分发。
 
-- `serial_excel_logger.py`: for Modbus RTU request/response devices
-- `serial_raw_excel_logger.py`: for devices that actively send serial data or use a custom frame format
+## 功能亮点
 
-## Files
+- 支持 Modbus RTU 采集与主动串口数据采集两种模式
+- 支持实时曲线显示、手动去皮和合力计算
+- 支持 PWM 分组测量，记录开始时间、结束时间、总电流和平均合力
+- 支持多组连续记录，并导出带日期文件名的 Excel 结果表
+- 支持视频回填 OCR 与可靠数据后处理
+- 支持直接打包为便携版，分发给实验人员使用
 
-- `serial_excel_logger.py`: main program
-- `serial_raw_excel_logger.py`: passive serial logger
-- `logger_config.json`: serial port and register settings
-- `raw_logger_config.json`: passive serial logger settings
-- `requirements.txt`: Python dependencies
-- `run_logger.bat`: Windows launcher
-- `run_raw_logger.bat`: passive logger launcher
+## 适用场景
 
-## Install
+- 485 推进器、测力、转速、电流等实验采集
+- 需要边看实时曲线边做人工判断的分组实验
+- 需要把实验记录导出成 Excel 并保留原始采样数据的场景
+- 需要把软件交给现场人员直接使用，而不要求安装 Python 的场景
+
+## 快速开始
+
+### 方式一：直接使用便携版
+
+1. 下载 Release 页面中的便携版压缩包
+2. 解压后进入软件目录
+3. 双击 `实验软件.exe`
+4. 按实验需要修改 `config/` 下的配置文件
+
+### 方式二：从源码运行
+
+```bash
+py -m pip install -r requirements.txt
+py app_launcher.py
+```
+
+## 便携版下载
+
+- 便携版通过 GitHub Releases 分发
+- 最新版本会上传带版本号和日期的 zip 附件
+- 下载后解压即可运行，无需单独安装 Python
+- 当前首个正式发布版本：`v1.0.0`
+- 当前附件文件名：`485experiment-software-portable-v1.0.0-20260512.zip`
+
+如果你正在浏览仓库主页，请优先前往 Releases 页面获取最新发布包。
+
+## PWM 分组测量流程
+
+1. 打开软件后进入 Modbus 页面
+2. 点击“开始实时曲线采集”打开曲线窗口
+3. 在分组测量区域输入本组 `PWM`
+4. 点击“开始测量”，软件记录开始时间
+5. 人工观察曲线稳定后，输入本组 `总电流`
+6. 点击“结束测量”，软件记录结束时间并计算该区间内的平均合力
+7. 查看窗口中的已完成组历史记录
+8. 点击“下一组”继续记录下一组 PWM
+9. 全部结束后点击“导出表格”，结果会保存到 `output/` 目录
+
+## 输出文件说明
+
+- `logs/`：原始采集日志与运行时输出的 Excel 数据
+- `output/`：导出的实验结果、后处理结果和图表
+- 分组测量导出文件名格式示例：`measurement_results_20260508_193000.xlsx`
+- 导出表前部为汇总列，后部为原始时间戳、原始合力和各通道原始值
+
+## 目录结构
+
+```text
+.
+|- app_launcher.py              # 桌面启动入口
+|- build_release.ps1           # 便携版与 Release 构建脚本
+|- config/                     # 串口、寄存器与采集配置
+|- scripts/                    # 主要功能脚本
+|- tests/                      # 自动化测试
+|- logs/                       # 采集日志目录
+|- output/                     # 导出结果目录
+|- videos/                     # 视频回填输入目录
+|- README_portable.txt         # 便携版使用说明
+```
+
+## 从源码运行
+
+安装依赖：
 
 ```bash
 py -m pip install -r requirements.txt
 ```
 
-## Configure
-
-### 1. Modbus RTU mode
-
-Edit `logger_config.json` before running:
-
-- `port`: Windows serial port, for example `COM3`
-- `baudrate`, `parity`, `stopbits`, `bytesize`: must match the transmitter
-- `slave_id`: Modbus device address
-- `poll_interval_seconds`: how often to read the device
-- `workbook_path`: output Excel file path, supports `{start_time}` in the filename
-- `workbook_name_timestamp_format`: filename timestamp format used by `{start_time}`
-- `tare_on_startup`: whether to send the startup tare command automatically
-- `startup_tare_use_reference_mapping`: auto-select the tare register based on the same version mapping used by the desktop software
-- `startup_tare_address`: tare register address, matching the reference desktop software
-- `startup_tare_value`: tare trigger value, matching the reference desktop software
-- `startup_tare_settle_seconds`: wait time after the startup tare command
-- `fields`: the registers you want to save
-
-Each field supports:
-
-- `name`: Excel column name
-- `function_code`: usually `3` or `4`
-- `address`: zero-based Modbus register offset
-- `data_type`: `uint16`, `int16`, `uint32`, `int32`, or `float32`
-- `scale`: optional multiplier
-- `offset`: optional offset after scaling
-- `precision`: optional rounding digits
-- `byte_order`: optional, `big` or `little`
-- `word_order`: optional, `big` or `little`
-
-If your manual shows addresses like `30001` or `40001`, convert them to zero-based offsets first. Example: `30001 -> 0`, `30002 -> 1`.
-
-### 2. Passive raw serial mode
-
-Edit `raw_logger_config.json` if your transmitter sends data by itself or is not Modbus RTU:
-
-- `read_mode`: `chunk` for binary frames, `line` for text lines ending with `\n`
-- `chunk_size`: maximum bytes to read at once in `chunk` mode
-- `encoding`: how to decode bytes into text for the `raw_text` Excel column
-- `workbook_path`: output Excel file path
-
-## Run
-
-### Modbus RTU logger
-
-Read continuously:
+启动桌面软件：
 
 ```bash
-py -3 serial_excel_logger.py --config logger_config.json
+py app_launcher.py
 ```
 
-The default config creates one workbook per run, for example `logs/485_weight_data_20260322_200204.xlsx`.
-
-Read once for testing:
+打包便携版：
 
 ```bash
-py -3 serial_excel_logger.py --config logger_config.json --once
+py -m PyInstaller -y app_launcher.spec
 ```
 
-On Windows you can also double-click `run_logger.bat`.
+或使用发布脚本：
 
-### Passive raw logger
-
-Read continuously:
-
-```bash
-py -3 serial_raw_excel_logger.py --config raw_logger_config.json
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_release.ps1
 ```
 
-Read once for testing:
+## 常见问题
 
-```bash
-py -3 serial_raw_excel_logger.py --config raw_logger_config.json --once
-```
+### 1. 串口打开成功但没有数据
 
-On Windows you can also double-click `run_raw_logger.bat`.
+- 检查 `COM` 口是否正确
+- 检查波特率、校验位、停止位、从站地址是否匹配
+- 检查 RS485 A/B 线是否接反
 
-## Excel Output
+### 2. 导出的数据不对
 
-Modbus workbook columns:
+- 检查 `config/` 中寄存器地址、数据类型、缩放系数和字节序设置
+- 检查实验开始前是否已完成去皮
 
-- `timestamp`
-- `unix_time`
-- `port`
-- `baudrate`
-- `slave_id`
-- `status`
-- `error`
-- `raw_frames`
-- one column for each configured field
+### 3. 便携版启动后找不到结果文件
 
-Passive raw workbook columns:
+- 原始采集一般写入 `logs/`
+- 分组测量导出和后处理结果一般写入 `output/`
 
-- `timestamp`
-- `unix_time`
-- `port`
-- `baudrate`
-- `bytesize`
-- `parity`
-- `stopbits`
-- `byte_count`
-- `raw_hex`
-- `raw_text`
+## 更新说明
 
-## Notes
+### v1.0.0
 
-- This program assumes the transmitter uses Modbus RTU over RS485.
-- If your device uses a custom frame format instead of Modbus RTU, the read logic in `serial_excel_logger.py` needs to be adjusted.
-- If values look wrong, check `baudrate`, `parity`, `stopbits`, `slave_id`, register address, function code, data type, and byte/word order.
-- The default startup tare uses the same desktop-software logic: first read version register `60000`, then send Modbus `06` with value `1` to register `21` or `38` depending on device version.
-
-## Troubleshooting
-
-- If `serial_excel_logger.py` reports `received 0 bytes`, the serial port opened successfully but the device did not reply.
-- Common causes: wrong `slave_id`, wrong `baudrate/parity/stopbits`, A/B wires reversed, missing RS485 converter, or the device is not Modbus RTU.
-- The sample `temperature_c` and `humidity_rh` registers in `logger_config.json` are placeholders. Replace them with your actual manual values.
-- If you are unsure whether the device is Modbus, run `serial_raw_excel_logger.py` first. If that script can receive data but the Modbus script cannot, your device is probably not using the Modbus request/response flow expected here.
+- 新增 PWM 分组测量流程
+- 支持记录开始时间、结束时间和总电流
+- 支持区间平均合力统计与历史组显示
+- 支持导出带日期文件名的实验结果表
+- 修复部分电脑中文显示异常、实时曲线依赖缺失和串口不可用时的报错提示
+- 完善便携版目录结构和中文说明

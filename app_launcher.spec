@@ -16,7 +16,17 @@ hiddenimports = [
     "scripts.serial_raw_excel_logger",
     "scripts.extract_reliable_data",
     "video_meter_to_excel",
+    "matplotlib.backends.backend_tkagg",
+    "matplotlib.backends._backend_tk",
+    "PIL.Image",
+    "PIL.ImageTk",
 ]
+
+for package_name in ("matplotlib", "PIL"):
+    package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
+    datas += package_datas
+    binaries += package_binaries
+    hiddenimports += package_hiddenimports
 
 package_datas, package_binaries, package_hiddenimports = collect_all("rapidocr_onnxruntime")
 datas += package_datas
