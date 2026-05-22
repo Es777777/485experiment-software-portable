@@ -39,8 +39,8 @@ py app_launcher.py
 - 便携版通过 GitHub Releases 分发
 - 最新版本会上传带版本号和日期的 zip 附件
 - 下载后解压即可运行，无需单独安装 Python
-- 当前最新发布版本：`v1.0.1`
-- 当前附件文件名：`485experiment-software-portable-v1.0.1-20260522.zip`
+- 当前最新发布版本：`v1.0.2`
+- 当前附件文件名：`485experiment-software-portable-v1.0.2-20260522.zip`
 
 如果你正在浏览仓库主页，请优先前往 Releases 页面获取最新发布包。
 
@@ -124,6 +124,12 @@ powershell -ExecutionPolicy Bypass -File .\build_release.ps1
 - 分组测量导出和后处理结果一般写入 `output/`
 
 ## 更新说明
+
+### v1.0.2
+
+- 修复主窗口与实时曲线窗口中的文字堆叠、挤压和布局不稳定问题
+- 调整分组测量区输入、按钮、结果卡片、公式区和历史区布局，使其在常见桌面缩放下更稳定
+- 重新打包普通版便携包并同步发布修复后的 release
 
 ### v1.0.1
 

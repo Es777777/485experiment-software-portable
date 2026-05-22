@@ -1,0 +1,6 @@
+{
+  "edition_key": "buaa",
+  "display_name": "北航特供版",
+  "t_channel_scale": 0.3333333333333333,
+  "notes": "T1/T2/T3 and derived moments are scaled by 1/3 for the BUAA sensor range."
+}

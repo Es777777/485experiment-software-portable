@@ -8,6 +8,7 @@ import sys
 import threading
 import tkinter as tk
 import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 from typing import Callable, Mapping, Sequence
@@ -21,6 +22,27 @@ except ImportError:
 
 
 APP_TITLE = "实验软件便携版"
+
+
+@dataclass(frozen=True)
+class EditionProfile:
+    edition_key: str = "standard"
+    display_name: str = "标准版"
+    t_channel_scale: float = 1.0
+    notes: str = ""
+
+
+def load_edition_profile(config_dir: Path) -> EditionProfile:
+    profile_path = config_dir / "edition_profile.json"
+    if not profile_path.exists():
+        return EditionProfile()
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    return EditionProfile(
+        edition_key=str(payload.get("edition_key", "standard")),
+        display_name=str(payload.get("display_name", "标准版")),
+        t_channel_scale=float(payload.get("t_channel_scale", 1.0)),
+        notes=str(payload.get("notes", "")),
+    )
 
 
 def build_launcher_palette() -> dict[str, str]:
@@ -38,10 +60,18 @@ def build_launcher_palette() -> dict[str, str]:
     }
 
 
-def build_launcher_branding_copy() -> dict[str, str]:
+def build_launcher_branding_copy(
+    profile: EditionProfile | None = None,
+) -> dict[str, str]:
+    active = profile or EditionProfile()
+    title = APP_TITLE
+    subtitle = "支持 Modbus 采集、实时曲线、原始串口采集、视频回填和后处理。"
+    if active.edition_key == "buaa":
+        title = f"{APP_TITLE} - {active.display_name}"
+        subtitle += " 北航特供版会将 T1/T2/T3 及其推导力矩结果按 1/3 口径显示。"
     return {
-        "title": APP_TITLE,
-        "subtitle": "支持 Modbus 采集、实时曲线、原始串口采集、视频回填和后处理。",
+        "title": title,
+        "subtitle": subtitle,
         "signature": (
             "Maintained by Chenghang Li  |  "
             "github.com/Es777777/485experiment-software-portable"
@@ -69,6 +99,26 @@ def build_launcher_tab_descriptions() -> dict[str, str]:
         "视频回填": "把视频表计识别结果补写到 Excel，便于后续对齐与分析。",
         "可靠数据与曲线": "提取稳定数据并输出图表，用于报告与复盘。",
     }
+
+
+def build_launcher_layout_metrics() -> dict[str, int]:
+    return {
+        "hero_subtitle_wrap": 820,
+        "workspace_intro_wrap": 820,
+        "tab_intro_wrap": 760,
+        "status_message_wrap": 560,
+        "path_entry_width": 64,
+    }
+
+
+def normalize_launcher_path_display(path_text: str, max_length: int = 64) -> str:
+    text = str(path_text)
+    if len(text) <= max_length:
+        return text
+    keep = max_length - 3
+    head = keep // 2
+    tail = keep - head
+    return text[:head] + "..." + text[-tail:]
 
 
 def pick_launcher_status_color(status: str, palette: Mapping[str, str]) -> str:
@@ -182,6 +232,7 @@ class ToolLauncherApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.app_root = ensure_runtime_directories(get_app_root())
+        self.edition_profile = load_edition_profile(self.app_root / "config")
         self.process: subprocess.Popen[str] | None = None
         self.log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self.start_buttons: list[ttk.Button] = []
@@ -217,7 +268,7 @@ class ToolLauncherApp:
         self.extract_stability_var = tk.StringVar(value="5.0")
         self.extract_tolerance_var = tk.StringVar(value="0.15")
 
-        self.root.title(APP_TITLE)
+        self.root.title(build_launcher_branding_copy(self.edition_profile)["title"])
         self.root.geometry("1080x820")
         self.root.minsize(940, 700)
         self.root.protocol("WM_DELETE_WINDOW", self.handle_close)
@@ -231,7 +282,8 @@ class ToolLauncherApp:
 
     def _build_ui(self) -> None:
         palette = build_launcher_palette()
-        branding = build_launcher_branding_copy()
+        branding = build_launcher_branding_copy(self.edition_profile)
+        metrics = build_launcher_layout_metrics()
         self.root.configure(bg=palette["shell_background"])
 
         outer = tk.Frame(
@@ -268,7 +320,8 @@ class ToolLauncherApp:
             fg=palette["text_muted"],
             justify="left",
             anchor="w",
-        ).pack(anchor="w", pady=(6, 0))
+            wraplength=metrics["hero_subtitle_wrap"],
+        ).pack(anchor="w", fill="x", pady=(6, 0))
         signature_label = tk.Label(
             hero,
             text=branding["signature"],
@@ -306,12 +359,17 @@ class ToolLauncherApp:
         ).pack(anchor="w")
         quick_links = ttk.Frame(quick_links_shell)
         quick_links.pack(fill="x", pady=(8, 0))
-        for label, path in build_launcher_quick_links(self.app_root):
+        for index, (label, path) in enumerate(
+            build_launcher_quick_links(self.app_root)
+        ):
             ttk.Button(
                 quick_links,
                 text=label,
                 command=lambda target=path: self._open_folder(target),
-            ).pack(side="left", padx=(0, 8))
+            ).grid(
+                row=index // 2, column=index % 2, sticky="ew", padx=(0, 8), pady=(0, 6)
+            )
+            quick_links.grid_columnconfigure(index % 2, weight=1)
 
         workspace_shell = tk.Frame(
             outer,
@@ -339,7 +397,8 @@ class ToolLauncherApp:
             fg=palette["text_muted"],
             anchor="w",
             justify="left",
-        ).pack(anchor="w", pady=(4, 10))
+            wraplength=metrics["workspace_intro_wrap"],
+        ).pack(anchor="w", fill="x", pady=(4, 10))
 
         notebook = ttk.Notebook(workspace_shell)
         notebook.pack(fill="x")
@@ -394,7 +453,9 @@ class ToolLauncherApp:
             bg=palette["panel_background"],
             fg=palette["text_muted"],
             anchor="w",
-        ).pack(side="left", padx=(12, 0))
+            justify="left",
+            wraplength=metrics["status_message_wrap"],
+        ).pack(side="left", padx=(12, 0), fill="x", expand=True)
 
         log_frame = tk.LabelFrame(
             outer,
@@ -434,9 +495,9 @@ class ToolLauncherApp:
         ttk.Label(
             parent,
             text=descriptions.get(title, ""),
-            wraplength=760,
+            wraplength=build_launcher_layout_metrics()["tab_intro_wrap"],
             justify="left",
-        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
+        ).grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 10))
 
     def _build_modbus_tab(self, parent: ttk.Frame) -> None:
         self._add_path_row(
@@ -461,27 +522,29 @@ class ToolLauncherApp:
         )
 
         live_row = ttk.Frame(parent)
-        live_row.grid(row=3, column=1, sticky="w", pady=(0, 10))
-        ttk.Label(live_row, text="实时窗口秒数").pack(side="left")
-        ttk.Entry(live_row, textvariable=self.live_plot_window_var, width=8).pack(
-            side="left", padx=(8, 16)
+        live_row.grid(row=3, column=1, sticky="ew", pady=(0, 10))
+        ttk.Label(live_row, text="实时窗口秒数").grid(row=0, column=0, sticky="w")
+        ttk.Entry(live_row, textvariable=self.live_plot_window_var, width=8).grid(
+            row=0, column=1, sticky="w", padx=(8, 16)
         )
         ttk.Checkbutton(
             live_row, text="平滑曲线", variable=self.live_plot_smooth_var
-        ).pack(side="left")
+        ).grid(row=0, column=2, sticky="w")
 
         ttk.Label(
             parent,
             text="“开始实时曲线采集”会打开独立曲线窗口，支持测定过程中手动去皮、PWM 分组测量、总电流录入、合力平均值统计和表格导出。",
+            wraplength=build_launcher_layout_metrics()["tab_intro_wrap"],
+            justify="left",
         ).grid(
             row=4,
             column=1,
-            sticky="w",
+            sticky="ew",
             pady=(0, 10),
         )
 
         actions = ttk.Frame(parent)
-        actions.grid(row=5, column=1, sticky="w")
+        actions.grid(row=5, column=1, sticky="ew")
         start_button = ttk.Button(
             actions, text="开始普通采集", command=self.start_modbus
         )
@@ -494,9 +557,11 @@ class ToolLauncherApp:
             command=self.stop_current_process,
             state="disabled",
         )
-        start_button.pack(side="left")
-        live_button.pack(side="left", padx=(8, 0))
-        stop_button.pack(side="left", padx=(8, 0))
+        start_button.grid(row=0, column=0, sticky="ew")
+        live_button.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        stop_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        actions.grid_columnconfigure(0, weight=1)
+        actions.grid_columnconfigure(1, weight=1)
         self.start_buttons.extend([start_button, live_button])
         self.stop_buttons.append(stop_button)
         parent.columnconfigure(1, weight=1)
@@ -606,19 +671,22 @@ class ToolLauncherApp:
             row=row_index, column=0, sticky="w", padx=(0, 12), pady=6
         )
         row = ttk.Frame(parent)
-        row.grid(row=row_index, column=1, sticky="w", pady=6)
+        row.grid(row=row_index, column=1, sticky="ew", pady=6)
 
-        combo = ttk.Combobox(row, textvariable=variable, width=24)
-        combo.pack(side="left")
+        combo = ttk.Combobox(row, textvariable=variable, width=18)
+        combo.grid(row=0, column=0, columnspan=3, sticky="ew")
         ttk.Button(
             row, text="搜索串口", command=lambda: self.refresh_serial_ports(target)
-        ).pack(side="left", padx=(8, 0))
+        ).grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(8, 0))
         ttk.Button(
             row, text="使用配置", command=lambda: self.use_config_port(target)
-        ).pack(side="left", padx=(8, 0))
-        ttk.Button(row, text="清空", command=lambda: variable.set("")).pack(
-            side="left", padx=(8, 0)
+        ).grid(row=1, column=1, sticky="ew", padx=(0, 8), pady=(8, 0))
+        ttk.Button(row, text="清空", command=lambda: variable.set("")).grid(
+            row=1, column=2, sticky="ew", pady=(8, 0)
         )
+        row.grid_columnconfigure(0, weight=1)
+        row.grid_columnconfigure(1, weight=1)
+        row.grid_columnconfigure(2, weight=1)
         return combo
 
     def _add_path_row(
@@ -635,9 +703,11 @@ class ToolLauncherApp:
         ttk.Label(parent, text=label).grid(
             row=row_index, column=0, sticky="w", padx=(0, 12), pady=6
         )
-        ttk.Entry(parent, textvariable=variable).grid(
-            row=row_index, column=1, sticky="ew", pady=6
-        )
+        ttk.Entry(
+            parent,
+            textvariable=variable,
+            width=build_launcher_layout_metrics()["path_entry_width"],
+        ).grid(row=row_index, column=1, sticky="ew", pady=6)
 
         def choose_path() -> None:
             if choose_kind == "directory":

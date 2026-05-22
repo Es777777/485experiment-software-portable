@@ -123,6 +123,14 @@ class FormulaDisplaySpec:
     value_text: str
 
 
+@dataclass(frozen=True)
+class EditionProfile:
+    edition_key: str = "standard"
+    display_name: str = "标准版"
+    t_channel_scale: float = 1.0
+    notes: str = ""
+
+
 @dataclass
 class ActiveMeasurementGroup:
     pwm: str
@@ -134,6 +142,19 @@ class ActiveMeasurementGroup:
 class MeasurementSessionState:
     completed_groups: List[MeasurementGroupResult] = field(default_factory=list)
     current_group: Optional[ActiveMeasurementGroup] = None
+
+
+def load_edition_profile(config_dir: Path) -> EditionProfile:
+    profile_path = config_dir / "edition_profile.json"
+    if not profile_path.exists():
+        return EditionProfile()
+    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    return EditionProfile(
+        edition_key=str(payload.get("edition_key", "standard")),
+        display_name=str(payload.get("display_name", "标准版")),
+        t_channel_scale=float(payload.get("t_channel_scale", 1.0)),
+        notes=str(payload.get("notes", "")),
+    )
 
 
 class SimpleStringVar:
@@ -493,16 +514,18 @@ def record_measurement_sample(
 
 def compute_group_channel_averages(
     samples: Sequence[MeasurementSample],
+    edition_profile: EditionProfile | None = None,
 ) -> Tuple[float, float, float]:
+    profile = edition_profile or EditionProfile()
     t1_values = [sample.raw_values.get("weight_ch1") for sample in samples]
     t2_values = [sample.raw_values.get("weight_ch2") for sample in samples]
     t3_values = [sample.raw_values.get("weight_ch3") for sample in samples]
     if any(value is None for value in t1_values + t2_values + t3_values):
         raise ValueError("当前分组缺少完整的三路力数据，无法计算力矩")
     return (
-        sum(cast(List[float], t1_values)) / len(samples),
-        sum(cast(List[float], t2_values)) / len(samples),
-        sum(cast(List[float], t3_values)) / len(samples),
+        sum(cast(List[float], t1_values)) / len(samples) * profile.t_channel_scale,
+        sum(cast(List[float], t2_values)) / len(samples) * profile.t_channel_scale,
+        sum(cast(List[float], t3_values)) / len(samples) * profile.t_channel_scale,
     )
 
 
@@ -523,6 +546,7 @@ def finish_measurement_group(
     state: MeasurementSessionState,
     total_current_text: str,
     end_time: datetime,
+    edition_profile: EditionProfile | None = None,
 ) -> MeasurementGroupResult:
     if state.current_group is None:
         raise ValueError("请先点击“开始测量”")
@@ -536,7 +560,10 @@ def finish_measurement_group(
     samples = list(state.current_group.samples)
     if not samples:
         raise ValueError("当前分组内还没有有效合力数据，请先采到稳定数据后再结束测量")
-    average_t1, average_t2, average_t3 = compute_group_channel_averages(samples)
+    average_t1, average_t2, average_t3 = compute_group_channel_averages(
+        samples,
+        edition_profile=edition_profile,
+    )
     moment_y, moment_x, moment_magnitude, theta_radians, theta_degrees = (
         compute_moment_metrics(average_t1, average_t2, average_t3)
     )
@@ -736,12 +763,31 @@ def build_measurement_context_text(
     return "已完成组数={0} | 请输入下一组 PWM，或检查历史后导出".format(completed_count)
 
 
-def build_measurement_footer_text() -> str:
+def build_measurement_footer_text(profile: EditionProfile | None = None) -> str:
+    active = profile or EditionProfile()
+    suffix = ""
+    if active.edition_key == "buaa":
+        suffix = "  |  北航特供版：T1/T2/T3 与由其推导的力矩结果按 1/3 换算"
     return (
         "485 Experiment Software  |  "
         "Maintained by Chenghang Li  |  "
-        "github.com/Es777777/485experiment-software-portable"
+        "github.com/Es777777/485experiment-software-portable" + suffix
     )
+
+
+def build_measurement_layout_metrics() -> Dict[str, Any]:
+    return {
+        "hint_wrap": 720,
+        "context_wrap": 720,
+        "footer_wrap": 720,
+        "formula_figure_size": (6.4, 2.6),
+    }
+
+
+def split_measurement_actions(labels: Sequence[str]) -> List[List[str]]:
+    items = list(labels)
+    midpoint = max(1, len(items) // 2)
+    return [items[:midpoint], items[midpoint:]]
 
 
 def build_measurement_theme_palette() -> Dict[str, str]:
@@ -945,8 +991,10 @@ class LivePlotter:
         smooth: bool = False,
         calc_window: int = 10,
         tare_seconds: float = 2.0,
+        edition_profile: EditionProfile | None = None,
     ) -> None:
         self.channel_names = channel_names
+        self.edition_profile = edition_profile or EditionProfile()
         self.total_force_name = TOTAL_FORCE_NAME
         self.plot_series_names = list(channel_names) + [self.total_force_name]
         self.window_seconds = window_seconds
@@ -1033,7 +1081,9 @@ class LivePlotter:
             "T3": SimpleStringVar("--"),
             "total_current": SimpleStringVar("--"),
         }
-        self.measurement_footer_var = SimpleStringVar(build_measurement_footer_text())
+        self.measurement_footer_var = SimpleStringVar(
+            build_measurement_footer_text(self.edition_profile)
+        )
         self.measurement_panel: Any = None
         self.measurement_status_label: Any = None
         self.measurement_summary_label: Any = None
@@ -1095,6 +1145,7 @@ class LivePlotter:
         self._rebind_measurement_vars()
 
         palette = build_measurement_theme_palette()
+        metrics = build_measurement_layout_metrics()
         panel = tk.LabelFrame(
             window,
             text="分组测量",
@@ -1107,63 +1158,83 @@ class LivePlotter:
         )
         panel.pack(side="bottom", fill="x", padx=10, pady=8)
         self.measurement_panel = panel
+        panel.grid_columnconfigure(0, weight=1)
 
         header_row = tk.Frame(panel, bg=palette["panel_background"])
         header_row.grid(row=0, column=0, sticky="ew")
-        entry_box = tk.Frame(header_row, bg=palette["panel_background"])
-        entry_box.grid(row=0, column=0, sticky="w")
-        action_box = tk.Frame(header_row, bg=palette["panel_background"])
-        action_box.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        header_row.grid_columnconfigure(0, weight=1)
+        input_box = tk.LabelFrame(
+            header_row,
+            text="输入区",
+            bg=palette["panel_background"],
+            fg=palette["text_primary"],
+            padx=10,
+            pady=8,
+            bd=1,
+            relief="groove",
+        )
+        input_box.grid(row=0, column=0, sticky="ew")
+        input_box.grid_columnconfigure(1, weight=1)
+        input_box.grid_columnconfigure(3, weight=1)
+        action_box = tk.LabelFrame(
+            panel,
+            text="操作区",
+            bg=palette["panel_background"],
+            fg=palette["text_primary"],
+            padx=10,
+            pady=8,
+            bd=1,
+            relief="groove",
+        )
+        action_box.grid(row=1, column=0, sticky="ew", pady=(8, 0))
 
         tk.Label(
-            entry_box,
+            input_box,
             text="PWM",
             bg=palette["panel_background"],
             fg=palette["text_primary"],
         ).grid(row=0, column=0, padx=(0, 6), pady=4, sticky="w")
         self.measurement_pwm_entry = ttk.Entry(
-            entry_box,
+            input_box,
             textvariable=self.measurement_pwm_var,
             width=12,
         )
-        self.measurement_pwm_entry.grid(row=0, column=1, pady=4, sticky="w")
+        self.measurement_pwm_entry.grid(row=0, column=1, pady=4, sticky="ew")
         tk.Label(
-            entry_box,
+            input_box,
             text="总电流",
             bg=palette["panel_background"],
             fg=palette["text_primary"],
         ).grid(row=0, column=2, padx=(12, 6), pady=4, sticky="w")
         self.measurement_current_entry = ttk.Entry(
-            entry_box,
+            input_box,
             textvariable=self.measurement_current_var,
             width=12,
         )
-        self.measurement_current_entry.grid(row=0, column=3, pady=4, sticky="w")
+        self.measurement_current_entry.grid(row=0, column=3, pady=4, sticky="ew")
 
-        ttk.Button(action_box, text="开始测量", command=self.start_measurement).grid(
-            row=0,
-            column=0,
-            padx=(0, 4),
-            pady=4,
-        )
-        ttk.Button(action_box, text="结束测量", command=self.finish_measurement).grid(
-            row=0,
-            column=1,
-            padx=4,
-            pady=4,
-        )
-        ttk.Button(action_box, text="下一组", command=self.prepare_next_group).grid(
-            row=0,
-            column=2,
-            padx=4,
-            pady=4,
-        )
-        ttk.Button(action_box, text="导出表格", command=self.export_measurements).grid(
-            row=0,
-            column=3,
-            padx=(4, 0),
-            pady=4,
-        )
+        action_specs = [
+            ("开始测量", self.start_measurement),
+            ("结束测量", self.finish_measurement),
+            ("下一组", self.prepare_next_group),
+            ("导出表格", self.export_measurements),
+        ]
+        split_labels = split_measurement_actions([label for label, _ in action_specs])
+        action_lookup = {label: command for label, command in action_specs}
+        for row_index, labels in enumerate(split_labels):
+            for column_index, label in enumerate(labels):
+                ttk.Button(
+                    action_box,
+                    text=label,
+                    command=action_lookup[label],
+                ).grid(
+                    row=row_index,
+                    column=column_index,
+                    sticky="ew",
+                    padx=(0 if column_index == 0 else 8, 0),
+                    pady=(0 if row_index == 0 else 8, 0),
+                )
+                action_box.grid_columnconfigure(column_index, weight=1)
 
         result_box = tk.Frame(
             panel,
@@ -1173,7 +1244,9 @@ class LivePlotter:
             highlightbackground=palette["border"],
             highlightthickness=1,
         )
-        result_box.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        result_box.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        result_box.grid_columnconfigure(0, weight=1)
+        result_box.grid_columnconfigure(1, weight=1)
 
         self.measurement_status_label = tk.Label(
             result_box,
@@ -1213,6 +1286,7 @@ class LivePlotter:
             fg=palette["text_muted"],
             anchor="w",
             justify="left",
+            wraplength=metrics["hint_wrap"],
         )
         hint_label.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12)
 
@@ -1224,6 +1298,7 @@ class LivePlotter:
             anchor="w",
             justify="left",
             font=("Microsoft YaHei UI", 9),
+            wraplength=metrics["context_wrap"],
         )
         context_label.grid(
             row=2, column=0, columnspan=2, sticky="ew", padx=12, pady=(6, 0)
@@ -1278,7 +1353,7 @@ class LivePlotter:
             self.measurement_metric_labels[key] = value_label
 
         self.measurement_formula_figure = Figure(
-            figsize=(7.0, 2.8),
+            figsize=metrics["formula_figure_size"],
             dpi=100,
             facecolor=palette["card_background"],
         )
@@ -1309,7 +1384,8 @@ class LivePlotter:
             highlightbackground=palette["border"],
             highlightthickness=1,
         )
-        history_box.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        history_box.grid(row=3, column=0, sticky="ew", pady=(10, 0))
+        history_box.grid_columnconfigure(0, weight=1)
         tk.Label(
             history_box,
             text="已完成组历史",
@@ -1335,7 +1411,7 @@ class LivePlotter:
         )
 
         footer_box = tk.Frame(panel, bg=palette["panel_background"])
-        footer_box.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        footer_box.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         self.measurement_footer_label = tk.Label(
             footer_box,
             textvariable=self.measurement_footer_var,
@@ -1343,6 +1419,8 @@ class LivePlotter:
             fg=palette["text_muted"],
             cursor="hand2",
             anchor="w",
+            justify="left",
+            wraplength=metrics["footer_wrap"],
         )
         self.measurement_footer_label.grid(row=0, column=0, sticky="w")
         self.measurement_footer_label.bind("<Button-1>", self._open_measurement_github)
@@ -1640,6 +1718,7 @@ class LivePlotter:
                     self.measurement_current_entry, self.measurement_current_var
                 ),
                 datetime.now(),
+                edition_profile=self.edition_profile,
             )
         except ValueError as exc:
             messagebox.showerror("结束测量失败", str(exc))
@@ -1815,6 +1894,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ensure_dependencies()
         config_path = resolve_config_path(args.config)
         config = load_config(config_path)
+        edition_profile = load_edition_profile(get_config_runtime_base(config_path))
         if args.port:
             config = replace(config, port=str(args.port).strip())
     except Exception as exc:
@@ -1846,6 +1926,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             channel_names=[f.name for f in config.fields],
             window_seconds=args.plot_window,
             smooth=args.smooth,
+            edition_profile=edition_profile,
         )
 
         while True:

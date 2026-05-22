@@ -51,6 +51,19 @@ class LauncherUiHelperTests(unittest.TestCase):
             "系统状态  |  Modbus 实时曲线 运行中",
         )
 
+    def test_build_launcher_branding_copy_uses_buaa_edition_label(self) -> None:
+        profile = app_launcher.EditionProfile(
+            edition_key="buaa",
+            display_name="北航特供版",
+            t_channel_scale=1.0 / 3.0,
+            notes="T values scaled for BUAA sensor range",
+        )
+
+        branding = app_launcher.build_launcher_branding_copy(profile)
+
+        self.assertIn("北航特供版", branding["title"])
+        self.assertIn("1/3", branding["subtitle"])
+
 
 class LauncherCommandTests(unittest.TestCase):
     def test_build_launcher_tab_descriptions_mentions_grouped_measurement(
@@ -112,6 +125,35 @@ class LauncherStatusSyncTests(unittest.TestCase):
             app.status_badge_label.configured["fg"],
             app_launcher.build_launcher_palette()["status_running"],
         )
+
+
+class LauncherLayoutHelperTests(unittest.TestCase):
+    def test_build_launcher_layout_metrics_define_wrap_lengths(self) -> None:
+        metrics = app_launcher.build_launcher_layout_metrics()
+
+        self.assertEqual(metrics["hero_subtitle_wrap"], 820)
+        self.assertEqual(metrics["workspace_intro_wrap"], 820)
+        self.assertEqual(metrics["tab_intro_wrap"], 760)
+        self.assertEqual(metrics["status_message_wrap"], 560)
+
+    def test_normalize_launcher_path_display_shortens_long_paths(self) -> None:
+        displayed = app_launcher.normalize_launcher_path_display(
+            r"C:/very/long/project/path/with/many/segments/config/logger_config.json",
+            max_length=42,
+        )
+
+        self.assertLessEqual(len(displayed), 42)
+        self.assertIn("...", displayed)
+
+    def test_build_launcher_branding_copy_keeps_mainline_title_for_standard_profile(
+        self,
+    ) -> None:
+        branding = app_launcher.build_launcher_branding_copy(
+            app_launcher.EditionProfile()
+        )
+
+        self.assertEqual(branding["title"], app_launcher.APP_TITLE)
+        self.assertNotIn("特供版", branding["title"])
 
 
 if __name__ == "__main__":

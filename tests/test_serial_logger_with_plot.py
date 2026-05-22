@@ -510,6 +510,42 @@ class GroupedMeasurementHelperTests(unittest.TestCase):
         ]:
             self.assertIn(expected, headers)
 
+    def test_finish_measurement_applies_buaa_scaling_to_t_values_and_moments(
+        self,
+    ) -> None:
+        state = serial_logger_with_plot.MeasurementSessionState()
+        serial_logger_with_plot.start_measurement_group(
+            state,
+            "1200",
+            datetime(2026, 5, 22, 12, 0, 0),
+        )
+        serial_logger_with_plot.record_measurement_sample(
+            state,
+            datetime(2026, 5, 22, 12, 0, 0, 100000),
+            {"weight_ch1": 3.0, "weight_ch2": 9.0, "weight_ch3": 6.0},
+            18.0,
+        )
+        profile = serial_logger_with_plot.EditionProfile(
+            edition_key="buaa",
+            display_name="北航特供版",
+            t_channel_scale=1.0 / 3.0,
+            notes="T values scaled for BUAA sensor range",
+        )
+
+        result = serial_logger_with_plot.finish_measurement_group(
+            state,
+            "2.40",
+            datetime(2026, 5, 22, 12, 0, 1),
+            edition_profile=profile,
+        )
+
+        self.assertEqual(result.average_t1, 1.0)
+        self.assertEqual(result.average_t2, 3.0)
+        self.assertEqual(result.average_t3, 2.0)
+        self.assertAlmostEqual(result.moment_y, 0.0)
+        self.assertAlmostEqual(result.moment_x, serial_logger_with_plot.math.sqrt(3.0))
+        self.assertAlmostEqual(result.theta_degrees, 90.0)
+
 
 class ExcelLoggerPersistenceTests(unittest.TestCase):
     def test_close_verifies_last_timestamp_was_saved(self) -> None:
@@ -623,6 +659,21 @@ class GroupedMeasurementDisplayHelperTests(unittest.TestCase):
         self.assertIn("Maintained by Chenghang Li", footer)
         self.assertIn("github.com/Es777777/485experiment-software-portable", footer)
 
+    def test_build_measurement_footer_text_includes_buaa_note_when_profile_enabled(
+        self,
+    ) -> None:
+        profile = serial_logger_with_plot.EditionProfile(
+            edition_key="buaa",
+            display_name="北航特供版",
+            t_channel_scale=1.0 / 3.0,
+            notes="T1/T2/T3 and derived moments are scaled by 1/3",
+        )
+
+        footer = serial_logger_with_plot.build_measurement_footer_text(profile)
+
+        self.assertIn("北航特供版", footer)
+        self.assertIn("1/3", footer)
+
     def test_build_measurement_context_text_covers_running_done_and_export_states(
         self,
     ) -> None:
@@ -697,6 +748,23 @@ class GroupedMeasurementDisplayHelperTests(unittest.TestCase):
         self.assertEqual(metric_values["T2"], "2.000")
         self.assertEqual(metric_values["T3"], "2.500")
         self.assertEqual(metric_values["total_current"], "1.250 A")
+
+    def test_build_measurement_layout_metrics_sets_wrap_and_figure_sizes(
+        self,
+    ) -> None:
+        metrics = serial_logger_with_plot.build_measurement_layout_metrics()
+
+        self.assertEqual(metrics["hint_wrap"], 720)
+        self.assertEqual(metrics["context_wrap"], 720)
+        self.assertEqual(metrics["footer_wrap"], 720)
+        self.assertEqual(metrics["formula_figure_size"], (6.4, 2.6))
+
+    def test_split_measurement_actions_breaks_controls_into_two_rows(self) -> None:
+        rows = serial_logger_with_plot.split_measurement_actions(
+            ["开始测量", "结束测量", "下一组", "导出表格"]
+        )
+
+        self.assertEqual(rows, [["开始测量", "结束测量"], ["下一组", "导出表格"]])
 
 
 class LivePlotterGroupedMeasurementTests(unittest.TestCase):
