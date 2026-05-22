@@ -1,7 +1,10 @@
 import importlib
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
+import warnings
 from datetime import datetime
 from pathlib import Path
 from unittest import mock
@@ -389,6 +392,160 @@ class GroupedMeasurementHelperTests(unittest.TestCase):
 
         self.assertEqual(export_path.name, "measurement_results_20260508_150405.xlsx")
 
+    def test_finish_measurement_computes_group_average_channels_and_moments(
+        self,
+    ) -> None:
+        state = serial_logger_with_plot.MeasurementSessionState()
+        serial_logger_with_plot.start_measurement_group(
+            state,
+            "1200",
+            datetime(2026, 5, 22, 10, 0, 0),
+        )
+        serial_logger_with_plot.record_measurement_sample(
+            state,
+            datetime(2026, 5, 22, 10, 0, 0, 100000),
+            {"weight_ch1": 1.0, "weight_ch2": 4.0, "weight_ch3": 2.0},
+            7.0,
+        )
+        serial_logger_with_plot.record_measurement_sample(
+            state,
+            datetime(2026, 5, 22, 10, 0, 0, 200000),
+            {"weight_ch1": 3.0, "weight_ch2": 8.0, "weight_ch3": 6.0},
+            17.0,
+        )
+
+        result = serial_logger_with_plot.finish_measurement_group(
+            state,
+            "2.50",
+            datetime(2026, 5, 22, 10, 0, 1),
+        )
+
+        self.assertEqual(result.average_t1, 2.0)
+        self.assertEqual(result.average_t2, 6.0)
+        self.assertEqual(result.average_t3, 4.0)
+        self.assertAlmostEqual(result.moment_y, 0.0)
+        self.assertAlmostEqual(
+            result.moment_x,
+            serial_logger_with_plot.math.sqrt(3) * 2.0,
+        )
+        self.assertAlmostEqual(
+            result.moment_magnitude,
+            serial_logger_with_plot.math.sqrt(12.0),
+        )
+        self.assertAlmostEqual(
+            result.theta_radians,
+            serial_logger_with_plot.math.pi / 2,
+        )
+        self.assertAlmostEqual(result.theta_degrees, 90.0)
+
+    def test_build_measurement_export_rows_includes_moment_columns(self) -> None:
+        groups = [
+            serial_logger_with_plot.MeasurementGroupResult(
+                index=1,
+                pwm="700",
+                start_time=datetime(2026, 5, 22, 10, 1, 0),
+                end_time=datetime(2026, 5, 22, 10, 1, 1),
+                total_current=1.5,
+                average_total_force=8.0,
+                average_t1=2.0,
+                average_t2=6.0,
+                average_t3=4.0,
+                moment_y=0.0,
+                moment_x=serial_logger_with_plot.math.sqrt(12.0),
+                moment_magnitude=serial_logger_with_plot.math.sqrt(12.0),
+                theta_radians=serial_logger_with_plot.math.pi / 2,
+                theta_degrees=90.0,
+                samples=[
+                    serial_logger_with_plot.MeasurementSample(
+                        timestamp=datetime(2026, 5, 22, 10, 1, 0, 100000),
+                        raw_values={
+                            "weight_ch1": 1.0,
+                            "weight_ch2": 2.0,
+                            "weight_ch3": 3.0,
+                        },
+                        total_force=6.0,
+                    )
+                ],
+            )
+        ]
+
+        headers, rows = serial_logger_with_plot.build_measurement_export_rows(groups)
+
+        self.assertEqual(
+            headers[:13],
+            [
+                "序号",
+                "PWM",
+                "开始时间(北京时间)",
+                "结束时间(北京时间)",
+                "总电流",
+                "合力平均值",
+                "T1平均值",
+                "T2平均值",
+                "T3平均值",
+                "M_y",
+                "M_x",
+                "M",
+                "theta(度)",
+            ],
+        )
+        self.assertEqual(rows[0][6], 2.0)
+        self.assertEqual(rows[0][7], 6.0)
+        self.assertEqual(rows[0][8], 4.0)
+        self.assertAlmostEqual(rows[0][12], 90.0)
+
+    def test_measurement_export_headers_cover_all_ui_result_fields(self) -> None:
+        headers, _rows = serial_logger_with_plot.build_measurement_export_rows([])
+
+        for expected in [
+            "总电流",
+            "合力平均值",
+            "T1平均值",
+            "T2平均值",
+            "T3平均值",
+            "M_y",
+            "M_x",
+            "M",
+            "theta(度)",
+        ]:
+            self.assertIn(expected, headers)
+
+    def test_finish_measurement_applies_buaa_scaling_to_t_values_and_moments(
+        self,
+    ) -> None:
+        state = serial_logger_with_plot.MeasurementSessionState()
+        serial_logger_with_plot.start_measurement_group(
+            state,
+            "1200",
+            datetime(2026, 5, 22, 12, 0, 0),
+        )
+        serial_logger_with_plot.record_measurement_sample(
+            state,
+            datetime(2026, 5, 22, 12, 0, 0, 100000),
+            {"weight_ch1": 3.0, "weight_ch2": 9.0, "weight_ch3": 6.0},
+            18.0,
+        )
+        profile = serial_logger_with_plot.EditionProfile(
+            edition_key="buaa",
+            display_name="北航特供版",
+            t_channel_scale=1.0 / 3.0,
+            notes="T values scaled for BUAA sensor range",
+        )
+
+        result = serial_logger_with_plot.finish_measurement_group(
+            state,
+            "2.40",
+            datetime(2026, 5, 22, 12, 0, 1),
+            edition_profile=profile,
+        )
+
+        self.assertEqual(result.average_t1, 1.0)
+        self.assertEqual(result.average_t2, 3.0)
+        self.assertEqual(result.average_t3, 2.0)
+        self.assertAlmostEqual(result.moment_y, 0.0)
+        self.assertAlmostEqual(result.moment_x, serial_logger_with_plot.math.sqrt(3.0))
+        self.assertAlmostEqual(result.theta_degrees, 90.0)
+
 
 class ExcelLoggerPersistenceTests(unittest.TestCase):
     def test_close_verifies_last_timestamp_was_saved(self) -> None:
@@ -462,6 +619,152 @@ class ExcelLoggerPersistenceTests(unittest.TestCase):
 
             self.assertEqual(len(logger.pending_rows), 1)
             self.assertEqual(logger.unsaved_rows, 1)
+
+
+class GroupedMeasurementDisplayHelperTests(unittest.TestCase):
+    def test_build_moment_formula_specs_returns_mathtext_expressions(self) -> None:
+        result = serial_logger_with_plot.MeasurementGroupResult(
+            index=1,
+            pwm="1300",
+            start_time=datetime(2026, 5, 22, 10, 2, 0),
+            end_time=datetime(2026, 5, 22, 10, 2, 1),
+            total_current=2.8,
+            average_total_force=12.0,
+            average_t1=2.0,
+            average_t2=6.0,
+            average_t3=4.0,
+            moment_y=0.0,
+            moment_x=serial_logger_with_plot.math.sqrt(12.0),
+            moment_magnitude=serial_logger_with_plot.math.sqrt(12.0),
+            theta_radians=serial_logger_with_plot.math.pi / 2,
+            theta_degrees=90.0,
+            samples=[],
+        )
+
+        specs = serial_logger_with_plot.build_moment_formula_specs(result)
+
+        self.assertEqual([spec.key for spec in specs], ["M_y", "M_x", "M", "theta"])
+        self.assertIn(r"\frac{1}{2}T_1", specs[0].expression)
+        self.assertIn(r"\frac{\sqrt{3}}{2}", specs[1].expression)
+        self.assertIn(r"\sqrt{M_x^2 + M_y^2}", specs[2].expression)
+        self.assertIn(
+            r"\theta = \operatorname{atan2}(M_x, M_y)",
+            specs[3].expression,
+        )
+        self.assertEqual(specs[3].value_text, "90.00°")
+
+    def test_build_measurement_footer_text_includes_author_and_github(self) -> None:
+        footer = serial_logger_with_plot.build_measurement_footer_text()
+
+        self.assertIn("Maintained by Chenghang Li", footer)
+        self.assertIn("github.com/Es777777/485experiment-software-portable", footer)
+
+    def test_build_measurement_footer_text_includes_buaa_note_when_profile_enabled(
+        self,
+    ) -> None:
+        profile = serial_logger_with_plot.EditionProfile(
+            edition_key="buaa",
+            display_name="北航特供版",
+            t_channel_scale=1.0 / 3.0,
+            notes="T1/T2/T3 and derived moments are scaled by 1/3",
+        )
+
+        footer = serial_logger_with_plot.build_measurement_footer_text(profile)
+
+        self.assertIn("北航特供版", footer)
+        self.assertIn("1/3", footer)
+
+    def test_build_measurement_context_text_covers_running_done_and_export_states(
+        self,
+    ) -> None:
+        result = serial_logger_with_plot.MeasurementGroupResult(
+            index=2,
+            pwm="1500",
+            start_time=datetime(2026, 5, 22, 11, 0, 0),
+            end_time=datetime(2026, 5, 22, 11, 0, 1),
+            total_current=2.8,
+            average_total_force=12.0,
+            average_t1=2.0,
+            average_t2=6.0,
+            average_t3=4.0,
+            moment_y=0.0,
+            moment_x=serial_logger_with_plot.math.sqrt(12.0),
+            moment_magnitude=serial_logger_with_plot.math.sqrt(12.0),
+            theta_radians=serial_logger_with_plot.math.pi / 2,
+            theta_degrees=90.0,
+            samples=[],
+        )
+
+        self.assertIn(
+            "当前组 PWM=1500",
+            serial_logger_with_plot.build_measurement_context_text(
+                1,
+                "测量中",
+                current_pwm="1500",
+            ),
+        )
+        self.assertIn(
+            "最近完成 #2",
+            serial_logger_with_plot.build_measurement_context_text(
+                2,
+                "已完成",
+                latest_result=result,
+            ),
+        )
+        self.assertIn(
+            "demo.xlsx",
+            serial_logger_with_plot.build_measurement_context_text(
+                2,
+                "已导出",
+                export_name="demo.xlsx",
+            ),
+        )
+
+    def test_build_measurement_metric_values_matches_export_visible_fields(
+        self,
+    ) -> None:
+        result = serial_logger_with_plot.MeasurementGroupResult(
+            index=1,
+            pwm="800",
+            start_time=datetime(2026, 5, 22, 11, 1, 0),
+            end_time=datetime(2026, 5, 22, 11, 1, 1),
+            total_current=1.25,
+            average_total_force=5.5,
+            average_t1=1.0,
+            average_t2=2.0,
+            average_t3=2.5,
+            moment_y=0.0,
+            moment_x=0.0,
+            moment_magnitude=0.0,
+            theta_radians=0.0,
+            theta_degrees=0.0,
+            samples=[],
+        )
+
+        metric_values = serial_logger_with_plot.build_measurement_metric_values(result)
+
+        self.assertEqual(metric_values["average_total_force"], "5.500")
+        self.assertEqual(metric_values["T1"], "1.000")
+        self.assertEqual(metric_values["T2"], "2.000")
+        self.assertEqual(metric_values["T3"], "2.500")
+        self.assertEqual(metric_values["total_current"], "1.250 A")
+
+    def test_build_measurement_layout_metrics_sets_wrap_and_figure_sizes(
+        self,
+    ) -> None:
+        metrics = serial_logger_with_plot.build_measurement_layout_metrics()
+
+        self.assertEqual(metrics["hint_wrap"], 720)
+        self.assertEqual(metrics["context_wrap"], 720)
+        self.assertEqual(metrics["footer_wrap"], 720)
+        self.assertEqual(metrics["formula_figure_size"], (6.4, 2.6))
+
+    def test_split_measurement_actions_breaks_controls_into_two_rows(self) -> None:
+        rows = serial_logger_with_plot.split_measurement_actions(
+            ["开始测量", "结束测量", "下一组", "导出表格"]
+        )
+
+        self.assertEqual(rows, [["开始测量", "结束测量"], ["下一组", "导出表格"]])
 
 
 class LivePlotterGroupedMeasurementTests(unittest.TestCase):
@@ -602,6 +905,296 @@ class LivePlotterGroupedMeasurementTests(unittest.TestCase):
         finally:
             plotter.close()
 
+    def test_finish_measurement_updates_formula_values_and_footer(self) -> None:
+        plotter = serial_logger_with_plot.LivePlotter(
+            ["weight_ch1", "weight_ch2", "weight_ch3"],
+            window_seconds=60,
+            smooth=False,
+        )
+        plotter.tare_done = True
+
+        try:
+            plotter.measurement_pwm_var.set("1300")
+            plotter.start_measurement()
+            plotter.add_point(
+                datetime(2026, 5, 22, 10, 3, 0, 100000),
+                {"weight_ch1": 1.0, "weight_ch2": 4.0, "weight_ch3": 2.0},
+            )
+            plotter.add_point(
+                datetime(2026, 5, 22, 10, 3, 0, 200000),
+                {"weight_ch1": 3.0, "weight_ch2": 8.0, "weight_ch3": 6.0},
+            )
+            plotter.measurement_current_var.set("2.80")
+            plotter.finish_measurement()
+
+            self.assertIn("平均合力=12.000", plotter.measurement_summary_var.get())
+            self.assertEqual(
+                plotter.measurement_formula_value_vars["M_y"].get(),
+                "0.000",
+            )
+            self.assertEqual(
+                plotter.measurement_formula_value_vars["theta"].get(),
+                "90.00°",
+            )
+            self.assertIn(
+                "Maintained by Chenghang Li",
+                plotter.measurement_footer_var.get(),
+            )
+        finally:
+            plotter.close()
+
+    def test_prepare_next_group_clears_formula_values_but_keeps_history(self) -> None:
+        plotter = serial_logger_with_plot.LivePlotter(
+            ["weight_ch1", "weight_ch2", "weight_ch3"],
+            window_seconds=60,
+            smooth=False,
+        )
+        plotter.tare_done = True
+
+        try:
+            plotter.measurement_state.completed_groups.append(
+                serial_logger_with_plot.MeasurementGroupResult(
+                    index=1,
+                    pwm="1200",
+                    start_time=datetime(2026, 5, 22, 10, 4, 0),
+                    end_time=datetime(2026, 5, 22, 10, 4, 1),
+                    total_current=2.3,
+                    average_total_force=9.5,
+                    average_t1=2.0,
+                    average_t2=4.0,
+                    average_t3=3.0,
+                    moment_y=0.0,
+                    moment_x=serial_logger_with_plot.math.sqrt(3),
+                    moment_magnitude=serial_logger_with_plot.math.sqrt(3),
+                    theta_radians=serial_logger_with_plot.math.pi / 2,
+                    theta_degrees=90.0,
+                    samples=[],
+                )
+            )
+            plotter._refresh_measurement_history()
+            plotter._apply_measurement_result(None)
+
+            plotter.prepare_next_group()
+
+            self.assertEqual(
+                plotter.measurement_formula_value_vars["M"].get(),
+                "--",
+            )
+            self.assertEqual(
+                plotter.measurement_formula_value_vars["theta"].get(),
+                "--",
+            )
+            self.assertIn("1200", plotter.measurement_history_var.get())
+        finally:
+            plotter.close()
+
+    def test_finish_measurement_updates_metric_cards(self) -> None:
+        plotter = serial_logger_with_plot.LivePlotter(
+            ["weight_ch1", "weight_ch2", "weight_ch3"],
+            window_seconds=60,
+            smooth=False,
+        )
+        plotter.tare_done = True
+
+        try:
+            plotter.measurement_pwm_var.set("1300")
+            plotter.start_measurement()
+            plotter.add_point(
+                datetime(2026, 5, 22, 10, 6, 0, 100000),
+                {"weight_ch1": 1.0, "weight_ch2": 4.0, "weight_ch3": 2.0},
+            )
+            plotter.add_point(
+                datetime(2026, 5, 22, 10, 6, 0, 200000),
+                {"weight_ch1": 3.0, "weight_ch2": 8.0, "weight_ch3": 6.0},
+            )
+            plotter.measurement_current_var.set("2.80")
+            plotter.finish_measurement()
+
+            self.assertEqual(
+                plotter.measurement_metric_value_vars["average_total_force"].get(),
+                "12.000",
+            )
+            self.assertEqual(
+                plotter.measurement_metric_value_vars["T1"].get(),
+                "2.000",
+            )
+            self.assertEqual(
+                plotter.measurement_metric_value_vars["T2"].get(),
+                "6.000",
+            )
+            self.assertEqual(
+                plotter.measurement_metric_value_vars["T3"].get(),
+                "4.000",
+            )
+            self.assertEqual(
+                plotter.measurement_metric_value_vars["total_current"].get(),
+                "2.800 A",
+            )
+        finally:
+            plotter.close()
+
+    def test_prepare_next_group_resets_metric_cards_to_placeholders(self) -> None:
+        plotter = serial_logger_with_plot.LivePlotter(
+            ["weight_ch1", "weight_ch2", "weight_ch3"],
+            window_seconds=60,
+            smooth=False,
+        )
+
+        try:
+            plotter.measurement_metric_value_vars = {
+                "average_total_force": serial_logger_with_plot.SimpleStringVar("9.999"),
+                "T1": serial_logger_with_plot.SimpleStringVar("1.000"),
+                "T2": serial_logger_with_plot.SimpleStringVar("2.000"),
+                "T3": serial_logger_with_plot.SimpleStringVar("3.000"),
+                "total_current": serial_logger_with_plot.SimpleStringVar("1.500 A"),
+            }
+
+            plotter.prepare_next_group()
+
+            self.assertEqual(
+                plotter.measurement_metric_value_vars["average_total_force"].get(),
+                "--",
+            )
+            self.assertEqual(
+                plotter.measurement_metric_value_vars["total_current"].get(),
+                "--",
+            )
+        finally:
+            plotter.close()
+
+    def test_measurement_context_text_guides_next_action(self) -> None:
+        plotter = serial_logger_with_plot.LivePlotter(
+            ["weight_ch1", "weight_ch2", "weight_ch3"],
+            window_seconds=60,
+            smooth=False,
+        )
+        plotter.tare_done = True
+
+        try:
+            plotter.measurement_pwm_var.set("1300")
+            plotter.start_measurement()
+
+            self.assertIn("当前组 PWM=1300", plotter.measurement_context_var.get())
+            self.assertIn("等待稳定后结束测量", plotter.measurement_context_var.get())
+
+            plotter.add_point(
+                datetime(2026, 5, 22, 10, 7, 0, 100000),
+                {"weight_ch1": 1.0, "weight_ch2": 4.0, "weight_ch3": 2.0},
+            )
+            plotter.add_point(
+                datetime(2026, 5, 22, 10, 7, 0, 200000),
+                {"weight_ch1": 3.0, "weight_ch2": 8.0, "weight_ch3": 6.0},
+            )
+            plotter.measurement_current_var.set("2.80")
+            plotter.finish_measurement()
+
+            self.assertIn("最近完成 #1", plotter.measurement_context_var.get())
+            self.assertIn(
+                "T1/T2/T3=2.000/6.000/4.000", plotter.measurement_context_var.get()
+            )
+            self.assertIn("可继续下一组或导出", plotter.measurement_context_var.get())
+
+            plotter.prepare_next_group()
+
+            self.assertIn("已完成组数=1", plotter.measurement_context_var.get())
+            self.assertIn("请输入下一组 PWM", plotter.measurement_context_var.get())
+        finally:
+            plotter.close()
+
+    def test_export_measurements_updates_context_with_file_name(self) -> None:
+        plotter = serial_logger_with_plot.LivePlotter(
+            ["weight_ch1", "weight_ch2", "weight_ch3"],
+            window_seconds=60,
+            smooth=False,
+        )
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                plotter.measurement_output_dir = serial_logger_with_plot.Path(temp_dir)
+                plotter.measurement_state.completed_groups.append(
+                    serial_logger_with_plot.MeasurementGroupResult(
+                        index=1,
+                        pwm="400",
+                        start_time=datetime(2026, 5, 8, 17, 0, 0),
+                        end_time=datetime(2026, 5, 8, 17, 0, 1),
+                        total_current=0.55,
+                        average_total_force=3.0,
+                        average_t1=1.0,
+                        average_t2=1.0,
+                        average_t3=1.0,
+                        moment_y=0.0,
+                        moment_x=0.0,
+                        moment_magnitude=0.0,
+                        theta_radians=0.0,
+                        theta_degrees=0.0,
+                        samples=[
+                            serial_logger_with_plot.MeasurementSample(
+                                timestamp=datetime(2026, 5, 8, 17, 0, 0, 100000),
+                                raw_values={
+                                    "weight_ch1": 1.0,
+                                    "weight_ch2": 1.0,
+                                    "weight_ch3": 1.0,
+                                },
+                                total_force=3.0,
+                            )
+                        ],
+                    )
+                )
+
+                export_path = plotter.export_measurements()
+
+                self.assertIn(export_path.name, plotter.measurement_context_var.get())
+        finally:
+            plotter.close()
+
+    def test_live_plotter_initialization_avoids_noninteractive_show_warning(
+        self,
+    ) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            plotter = serial_logger_with_plot.LivePlotter(
+                ["weight_ch1", "weight_ch2", "weight_ch3"],
+                window_seconds=60,
+                smooth=False,
+            )
+            try:
+                pass
+            finally:
+                plotter.close()
+
+        self.assertFalse(
+            any(
+                "FigureCanvasAgg is non-interactive" in str(item.message)
+                for item in caught
+            )
+        )
+
+    def test_single_point_update_avoids_identical_xlim_warning(self) -> None:
+        plotter = serial_logger_with_plot.LivePlotter(
+            ["weight_ch1", "weight_ch2", "weight_ch3"],
+            window_seconds=60,
+            smooth=False,
+        )
+        plotter.tare_done = True
+
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                plotter.add_point(
+                    datetime(2026, 5, 22, 10, 5, 0, 100000),
+                    {"weight_ch1": 1.0, "weight_ch2": 2.0, "weight_ch3": 3.0},
+                )
+
+            self.assertFalse(
+                any(
+                    "Attempting to set identical low and high xlims"
+                    in str(item.message)
+                    for item in caught
+                )
+            )
+        finally:
+            plotter.close()
+
 
 class MeasurementWorkbookTests(unittest.TestCase):
     def test_write_measurement_workbook_creates_expected_headers(self) -> None:
@@ -653,6 +1246,48 @@ class MeasurementWorkbookTests(unittest.TestCase):
             )
             self.assertIn("原始时间戳_1", headers)
             self.assertEqual(max_row, 2)
+
+
+class ScriptEntryPointTests(unittest.TestCase):
+    def _run_help(self, script_path: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, script_path, "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+    def test_serial_logger_script_help_runs_from_repo_root(self) -> None:
+        completed = self._run_help("scripts/serial_logger_with_plot.py")
+
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+        self.assertIn("Serial data logger", completed.stdout)
+
+    def test_serial_excel_logger_help_runs_from_repo_root(self) -> None:
+        completed = self._run_help("scripts/serial_excel_logger.py")
+
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+        self.assertIn("Modbus", completed.stdout)
+
+    def test_serial_raw_excel_logger_help_runs_from_repo_root(self) -> None:
+        completed = self._run_help("scripts/serial_raw_excel_logger.py")
+
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+        self.assertIn("passively read serial data", completed.stdout.lower())
+
+    def test_extract_reliable_data_help_runs_from_repo_root(self) -> None:
+        completed = self._run_help("scripts/extract_reliable_data.py")
+
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+        self.assertIn("reliable", completed.stdout.lower())
+
+    def test_video_meter_to_excel_help_runs_from_repo_root(self) -> None:
+        completed = self._run_help("video_meter_to_excel.py")
+
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+        self.assertIn("voltage/current", completed.stdout)
 
 
 if __name__ == "__main__":
