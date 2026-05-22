@@ -11,9 +11,9 @@ class ReadmeContentTests(unittest.TestCase):
         self.assertIn("## 便携版下载", readme)
         self.assertIn("## PWM 分组测量流程", readme)
         self.assertIn("## 从源码运行", readme)
-        self.assertIn("v1.0.0", readme)
+        self.assertIn("v1.0.1", readme)
         self.assertIn("Releases", readme)
-        self.assertIn("485experiment-software-portable-v1.0.0-20260512.zip", readme)
+        self.assertIn("485experiment-software-portable-v1.0.1-20260522.zip", readme)
 
     def test_portable_readme_describes_grouped_measurement_steps(self) -> None:
         portable = Path("README_portable.txt").read_text(encoding="utf-8")
@@ -28,5 +28,5 @@ class ReadmeContentTests(unittest.TestCase):
         changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
 
         self.assertIn("# Changelog", changelog)
-        self.assertIn("## v1.0.0", changelog)
-        self.assertIn("PWM 分组测量", changelog)
+        self.assertIn("## v1.0.1", changelog)
+        self.assertIn("主窗口 UI", changelog)

@@ -1,7 +1,7 @@
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $buildRoot = Join-Path $projectRoot "build"
 $distRoot = Join-Path $projectRoot "dist"
-$releaseVersion = "v1.0.0"
+$releaseVersion = "v1.0.1"
 $releaseDate = Get-Date -Format "yyyyMMdd"
 $zipName = "485experiment-software-portable-$releaseVersion-$releaseDate.zip"
 

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import filedialog, font as tkfont, messagebox, ttk
 from typing import Callable, Mapping, Sequence
@@ -20,6 +21,58 @@ except ImportError:
 
 
 APP_TITLE = "实验软件便携版"
+
+
+def build_launcher_palette() -> dict[str, str]:
+    return {
+        "shell_background": "#eef3f8",
+        "panel_background": "#ffffff",
+        "panel_alt": "#f8fbff",
+        "accent": "#0f4c81",
+        "accent_soft": "#dbeafe",
+        "text_primary": "#102a43",
+        "text_muted": "#52606d",
+        "border": "#d9e2ec",
+        "status_ready": "#0f766e",
+        "status_running": "#d97706",
+    }
+
+
+def build_launcher_branding_copy() -> dict[str, str]:
+    return {
+        "title": APP_TITLE,
+        "subtitle": "支持 Modbus 采集、实时曲线、原始串口采集、视频回填和后处理。",
+        "signature": (
+            "Maintained by Chenghang Li  |  "
+            "github.com/Es777777/485experiment-software-portable"
+        ),
+    }
+
+
+def build_launcher_quick_links(app_root: Path) -> list[tuple[str, Path]]:
+    return [
+        ("打开 config", app_root / "config"),
+        ("打开 logs", app_root / "logs"),
+        ("打开 videos", app_root / "videos"),
+        ("打开 output", app_root / "output"),
+    ]
+
+
+def format_launcher_status_badge(status: str) -> str:
+    return "系统状态  |  {0}".format(status.strip() or "就绪")
+
+
+def build_launcher_tab_descriptions() -> dict[str, str]:
+    return {
+        "Modbus 采集": "适用于标准 Modbus 轮询与实时曲线采集，支持 PWM 分组测量、总电流录入与 Excel 导出。",
+        "原始串口采集": "直接记录原始串口数据，适合底层调试与对照采集。",
+        "视频回填": "把视频表计识别结果补写到 Excel，便于后续对齐与分析。",
+        "可靠数据与曲线": "提取稳定数据并输出图表，用于报告与复盘。",
+    }
+
+
+def pick_launcher_status_color(status: str, palette: Mapping[str, str]) -> str:
+    return palette["status_running"] if "运行中" in status else palette["status_ready"]
 
 
 def configure_text_streams() -> None:
@@ -42,9 +95,7 @@ def build_child_process_environment(
     return env
 
 
-def select_preferred_port(
-    detected_ports: Sequence[str], configured_port: str
-) -> str:
+def select_preferred_port(detected_ports: Sequence[str], configured_port: str) -> str:
     ports = [port.strip() for port in detected_ports if port.strip()]
     config_port = configured_port.strip()
     config_upper = config_port.upper()
@@ -138,6 +189,8 @@ class ToolLauncherApp:
         self.modbus_detected_ports: list[str] = []
         self.raw_detected_ports: list[str] = []
         self.status_var = tk.StringVar(value="就绪")
+        self.status_badge_var: tk.StringVar | None = None
+        self.status_badge_label: tk.Label | None = None
 
         self.modbus_config_var = tk.StringVar(
             value=str(self.app_root / "config" / "logger_config.json")
@@ -177,33 +230,119 @@ class ToolLauncherApp:
         self.root.after(120, self._poll_log_queue)
 
     def _build_ui(self) -> None:
-        outer = ttk.Frame(self.root, padding=16)
+        palette = build_launcher_palette()
+        branding = build_launcher_branding_copy()
+        self.root.configure(bg=palette["shell_background"])
+
+        outer = tk.Frame(
+            self.root,
+            bg=palette["shell_background"],
+            padx=18,
+            pady=18,
+        )
         outer.pack(fill="both", expand=True)
 
-        ttk.Label(outer, text=APP_TITLE, font=("Microsoft YaHei UI", 18, "bold")).pack(
-            anchor="w"
-        )
-        ttk.Label(
+        hero = tk.Frame(
             outer,
-            text="支持 Modbus 采集、实时曲线、原始串口采集、视频回填和后处理。可直接搜索可用 COM 口并临时切换。",
-        ).pack(anchor="w", pady=(6, 10))
+            bg=palette["panel_background"],
+            bd=1,
+            relief="solid",
+            highlightbackground=palette["border"],
+            highlightthickness=1,
+            padx=20,
+            pady=18,
+        )
+        hero.pack(fill="x")
+        tk.Label(
+            hero,
+            text=branding["title"],
+            bg=palette["panel_background"],
+            fg=palette["text_primary"],
+            font=("Microsoft YaHei UI", 22, "bold"),
+            anchor="w",
+        ).pack(anchor="w")
+        tk.Label(
+            hero,
+            text=branding["subtitle"],
+            bg=palette["panel_background"],
+            fg=palette["text_muted"],
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w", pady=(6, 0))
+        signature_label = tk.Label(
+            hero,
+            text=branding["signature"],
+            bg=palette["panel_background"],
+            fg=palette["accent"],
+            cursor="hand2",
+            anchor="w",
+        )
+        signature_label.pack(anchor="w", pady=(8, 0))
+        signature_label.bind(
+            "<Button-1>",
+            lambda _event: self._open_url(
+                "https://github.com/Es777777/485experiment-software-portable"
+            ),
+        )
 
-        quick_links = ttk.Frame(outer)
-        quick_links.pack(fill="x", pady=(0, 12))
-        for label, path in (
-            ("打开 config", self.app_root / "config"),
-            ("打开 logs", self.app_root / "logs"),
-            ("打开 videos", self.app_root / "videos"),
-            ("打开 output", self.app_root / "output"),
-        ):
+        quick_links_shell = tk.Frame(
+            outer,
+            bg=palette["panel_alt"],
+            bd=1,
+            relief="solid",
+            highlightbackground=palette["border"],
+            highlightthickness=1,
+            padx=12,
+            pady=10,
+        )
+        quick_links_shell.pack(fill="x", pady=(12, 0))
+        tk.Label(
+            quick_links_shell,
+            text="常用入口",
+            bg=palette["panel_alt"],
+            fg=palette["text_primary"],
+            font=("Microsoft YaHei UI", 10, "bold"),
+            anchor="w",
+        ).pack(anchor="w")
+        quick_links = ttk.Frame(quick_links_shell)
+        quick_links.pack(fill="x", pady=(8, 0))
+        for label, path in build_launcher_quick_links(self.app_root):
             ttk.Button(
                 quick_links,
                 text=label,
                 command=lambda target=path: self._open_folder(target),
             ).pack(side="left", padx=(0, 8))
 
-        notebook = ttk.Notebook(outer)
-        notebook.pack(fill="x", pady=(0, 12))
+        workspace_shell = tk.Frame(
+            outer,
+            bg=palette["panel_background"],
+            bd=1,
+            relief="solid",
+            highlightbackground=palette["border"],
+            highlightthickness=1,
+            padx=14,
+            pady=14,
+        )
+        workspace_shell.pack(fill="both", expand=False, pady=(12, 0))
+        tk.Label(
+            workspace_shell,
+            text="实验工作台",
+            bg=palette["panel_background"],
+            fg=palette["text_primary"],
+            font=("Microsoft YaHei UI", 12, "bold"),
+            anchor="w",
+        ).pack(anchor="w")
+        tk.Label(
+            workspace_shell,
+            text="按页切换采集、回填与后处理任务；关键操作入口和串口选择放在每个页签顶部。",
+            bg=palette["panel_background"],
+            fg=palette["text_muted"],
+            anchor="w",
+            justify="left",
+        ).pack(anchor="w", pady=(4, 10))
+
+        notebook = ttk.Notebook(workspace_shell)
+        notebook.pack(fill="x")
 
         modbus_tab = ttk.Frame(notebook, padding=12)
         raw_tab = ttk.Frame(notebook, padding=12)
@@ -215,23 +354,71 @@ class ToolLauncherApp:
         notebook.add(video_tab, text="视频回填")
         notebook.add(extract_tab, text="可靠数据与曲线")
 
+        self._add_tab_intro(modbus_tab, "Modbus 采集")
+        self._add_tab_intro(raw_tab, "原始串口采集")
+        self._add_tab_intro(video_tab, "视频回填")
+        self._add_tab_intro(extract_tab, "可靠数据与曲线")
+
         self._build_modbus_tab(modbus_tab)
         self._build_raw_tab(raw_tab)
         self._build_video_tab(video_tab)
         self._build_extract_tab(extract_tab)
 
-        status_row = ttk.Frame(outer)
-        status_row.pack(fill="x")
-        ttk.Label(status_row, text="当前状态:").pack(side="left")
-        ttk.Label(status_row, textvariable=self.status_var).pack(
-            side="left", padx=(6, 0)
+        status_bar = tk.Frame(
+            outer,
+            bg=palette["panel_background"],
+            bd=1,
+            relief="solid",
+            highlightbackground=palette["border"],
+            highlightthickness=1,
+            padx=14,
+            pady=10,
         )
+        status_bar.pack(fill="x", pady=(12, 0))
+        self.status_badge_var = tk.StringVar(
+            value=format_launcher_status_badge(self.status_var.get())
+        )
+        self.status_badge_label = tk.Label(
+            status_bar,
+            textvariable=self.status_badge_var,
+            bg=palette["accent_soft"],
+            fg=pick_launcher_status_color(self.status_var.get(), palette),
+            font=("Microsoft YaHei UI", 10, "bold"),
+            padx=12,
+            pady=6,
+        )
+        self.status_badge_label.pack(side="left")
+        tk.Label(
+            status_bar,
+            text="运行日志会在下方持续刷新，启动器会阻止多个任务同时运行。",
+            bg=palette["panel_background"],
+            fg=palette["text_muted"],
+            anchor="w",
+        ).pack(side="left", padx=(12, 0))
 
-        log_frame = ttk.LabelFrame(outer, text="运行日志", padding=10)
+        log_frame = tk.LabelFrame(
+            outer,
+            text="运行日志",
+            bg=palette["panel_background"],
+            fg=palette["text_primary"],
+            padx=10,
+            pady=10,
+            bd=1,
+            relief="solid",
+            highlightbackground=palette["border"],
+            highlightthickness=1,
+        )
         log_frame.pack(fill="both", expand=True, pady=(12, 0))
 
         self.log_text = tk.Text(
-            log_frame, wrap="word", height=18, font=("Consolas", 10)
+            log_frame,
+            wrap="word",
+            height=18,
+            font=("Consolas", 10),
+            bg="#0f172a",
+            fg="#e2e8f0",
+            insertbackground="#e2e8f0",
+            relief="flat",
         )
         scrollbar = ttk.Scrollbar(
             log_frame, orient="vertical", command=self.log_text.yview
@@ -241,6 +428,15 @@ class ToolLauncherApp:
         scrollbar.pack(side="right", fill="y")
 
         self._append_log("启动器已就绪。实时曲线已经接到 Modbus 页面。")
+
+    def _add_tab_intro(self, parent: ttk.Frame, title: str) -> None:
+        descriptions = build_launcher_tab_descriptions()
+        ttk.Label(
+            parent,
+            text=descriptions.get(title, ""),
+            wraplength=760,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
 
     def _build_modbus_tab(self, parent: ttk.Frame) -> None:
         self._add_path_row(
@@ -517,7 +713,11 @@ class ToolLauncherApp:
             self.raw_detected_ports = ports
 
     def _detected_ports_for(self, target: str) -> list[str]:
-        return self.modbus_detected_ports if target == "modbus" else self.raw_detected_ports
+        return (
+            self.modbus_detected_ports
+            if target == "modbus"
+            else self.raw_detected_ports
+        )
 
     def _load_config_port(self, config_path: Path) -> str:
         try:
@@ -568,9 +768,7 @@ class ToolLauncherApp:
         if port:
             detected_ports = self._detected_ports_for(target)
             selected_port = (
-                select_preferred_port(detected_ports, port)
-                if prefer_detected
-                else port
+                select_preferred_port(detected_ports, port) if prefer_detected else port
             )
             port_var.set(selected_port)
             current_values = list(combo["values"]) if combo is not None else []
@@ -638,6 +836,16 @@ class ToolLauncherApp:
         self.log_text.insert("end", message.rstrip() + "\n")
         self.log_text.see("end")
 
+    def _set_status(self, value: str) -> None:
+        self.status_var.set(value)
+        if self.status_badge_var is not None:
+            self.status_badge_var.set(format_launcher_status_badge(value))
+        if self.status_badge_label is not None:
+            palette = build_launcher_palette()
+            self.status_badge_label.configure(
+                fg=pick_launcher_status_color(value, palette)
+            )
+
     def _poll_log_queue(self) -> None:
         while True:
             try:
@@ -649,7 +857,7 @@ class ToolLauncherApp:
                 self._append_log(payload)
             elif kind == "done":
                 self._set_running_state(False)
-                self.status_var.set(payload)
+                self._set_status(payload)
                 self.process = None
                 self._append_log(payload)
 
@@ -707,14 +915,14 @@ class ToolLauncherApp:
                 env=build_child_process_environment(),
             )
         except OSError as exc:
-            self.status_var.set("{0} 启动失败".format(tool_label))
+            self._set_status("{0} 启动失败".format(tool_label))
             self._append_log("启动失败: {0}".format(exc))
             messagebox.showerror(
                 "启动失败",
                 "{0} 无法启动。\n\n详细信息: {1}".format(tool_label, exc),
             )
             return
-        self.status_var.set("{0} 运行中".format(tool_label))
+        self._set_status("{0} 运行中".format(tool_label))
         self._set_running_state(True)
 
         threading.Thread(
@@ -848,6 +1056,12 @@ class ToolLauncherApp:
     def _open_folder(self, folder: Path) -> None:
         folder.mkdir(parents=True, exist_ok=True)
         os.startfile(str(folder))
+
+    def _open_url(self, url: str) -> None:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
 
 
 def main() -> int:
