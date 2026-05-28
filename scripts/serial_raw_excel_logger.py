@@ -47,6 +47,7 @@ class RawExcelLogger:
     def __init__(self, workbook_path: Path, sheet_name: str) -> None:
         self.workbook_path = workbook_path
         self.sheet_name = sheet_name
+        self.last_appended_timestamp: Optional[str] = None
         self.headers = [
             "timestamp",
             "unix_time",
@@ -65,6 +66,42 @@ class RawExcelLogger:
         self._ensure_headers()
         self._refresh_sheet_layout()
         self.workbook.save(self.workbook_path)
+
+    def _timestamp_column_index(self) -> int:
+        return self.headers.index("timestamp") + 1
+
+    def _read_last_saved_timestamp(self) -> Optional[str]:
+        workbook = load_workbook(self.workbook_path, read_only=True, data_only=True)
+        try:
+            worksheet = (
+                workbook[self.sheet_name]
+                if self.sheet_name in workbook.sheetnames
+                else workbook.active
+            )
+            timestamp_column = self._timestamp_column_index()
+            for row_index in range(worksheet.max_row, 1, -1):
+                value = worksheet.cell(row=row_index, column=timestamp_column).value
+                if value in (None, ""):
+                    continue
+                return str(value)
+        finally:
+            close_method = getattr(workbook, "close", None)
+            if callable(close_method):
+                close_method()
+        return None
+
+    def _verify_last_saved_timestamp(self, expected_timestamp: Optional[str]) -> None:
+        if not expected_timestamp:
+            return
+        actual_timestamp = self._read_last_saved_timestamp()
+        if actual_timestamp != expected_timestamp:
+            raise RuntimeError(
+                "Excel 写入校验失败：期望最后时间戳为 {0}，实际为 {1}。"
+                " 请检查 Excel 文件是否被占用或保存失败。".format(
+                    expected_timestamp,
+                    actual_timestamp if actual_timestamp is not None else "空",
+                )
+            )
 
     def _load_or_create_workbook(self):
         if self.workbook_path.exists():
@@ -115,9 +152,20 @@ class RawExcelLogger:
             self.worksheet.column_dimensions[column_letter].width = width
 
     def append_row(self, row_data: Dict[str, Any]) -> None:
+        timestamp_value = row_data.get("timestamp")
+        self.last_appended_timestamp = (
+            str(timestamp_value) if timestamp_value not in (None, "") else None
+        )
         self.worksheet.append([row_data.get(header, "") for header in self.headers])
         self._refresh_sheet_layout()
         self.workbook.save(self.workbook_path)
+        self._verify_last_saved_timestamp(self.last_appended_timestamp)
+
+    def close(self) -> None:
+        self._verify_last_saved_timestamp(self.last_appended_timestamp)
+        close_method = getattr(self.workbook, "close", None)
+        if callable(close_method):
+            close_method()
 
 
 def ensure_dependencies() -> None:
@@ -250,31 +298,33 @@ def format_console_output(row_data: Dict[str, Any], workbook_path: Path) -> str:
 
 def run_logger(config: RawAppConfig, once: bool) -> int:
     logger = RawExcelLogger(config.workbook_path, config.sheet_name)
-
-    with create_serial_client(config) as client:
-        print(
-            "Listening on {0} ({1},{2},{3},{4}) in {5} mode...".format(
-                config.port,
-                config.baudrate,
-                config.bytesize,
-                config.parity,
-                config.stopbits,
-                config.read_mode,
+    try:
+        with create_serial_client(config) as client:
+            print(
+                "Listening on {0} ({1},{2},{3},{4}) in {5} mode...".format(
+                    config.port,
+                    config.baudrate,
+                    config.bytesize,
+                    config.parity,
+                    config.stopbits,
+                    config.read_mode,
+                )
             )
-        )
-        while True:
-            payload = read_payload(client, config)
-            if not payload:
-                if config.idle_sleep_seconds > 0:
-                    time.sleep(config.idle_sleep_seconds)
-                continue
+            while True:
+                payload = read_payload(client, config)
+                if not payload:
+                    if config.idle_sleep_seconds > 0:
+                        time.sleep(config.idle_sleep_seconds)
+                    continue
 
-            row_data = build_row(config, payload)
-            logger.append_row(row_data)
-            print(format_console_output(row_data, config.workbook_path))
+                row_data = build_row(config, payload)
+                logger.append_row(row_data)
+                print(format_console_output(row_data, config.workbook_path))
 
-            if once:
-                return 0
+                if once:
+                    return 0
+    finally:
+        logger.close()
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -131,6 +131,8 @@ class ExcelLogger:
         self.autosave_interval_seconds = autosave_interval_seconds
         self.unsaved_rows = 0
         self.pending_rows: List[List[Any]] = []
+        self.last_appended_timestamp: Optional[str] = None
+        self.last_flushed_timestamp: Optional[str] = None
         self.expected_headers = [
             "timestamp",
             "unix_time",
@@ -291,9 +293,53 @@ class ExcelLogger:
         if callable(close_method):
             close_method()
 
+    def _timestamp_column_index(self) -> int:
+        return self.headers.index("timestamp") + 1
+
+    def _read_last_saved_timestamp(self) -> Optional[str]:
+        assert load_workbook is not None
+        if not self.workbook_path.exists():
+            return None
+        workbook = cast(
+            "OpenpyxlWorkbook",
+            load_workbook(self.workbook_path, read_only=True, data_only=True),
+        )
+        try:
+            worksheet = (
+                cast("Worksheet", workbook[self.sheet_name])
+                if self.sheet_name in workbook.sheetnames
+                else cast("Worksheet", workbook.active)
+            )
+            timestamp_column = self._timestamp_column_index()
+            for row_index in range(worksheet.max_row, 1, -1):
+                value = worksheet.cell(row=row_index, column=timestamp_column).value
+                if value in (None, ""):
+                    continue
+                return str(value)
+        finally:
+            self._close_workbook(workbook)
+        return None
+
+    def _verify_last_saved_timestamp(self, expected_timestamp: Optional[str]) -> None:
+        if not expected_timestamp:
+            return
+        actual_timestamp = self._read_last_saved_timestamp()
+        if actual_timestamp != expected_timestamp:
+            raise RuntimeError(
+                "Excel 写入校验失败：期望最后时间戳为 {0}，实际为 {1}。"
+                " 请检查 Excel 文件是否被占用或保存失败。".format(
+                    expected_timestamp,
+                    actual_timestamp if actual_timestamp is not None else "空",
+                )
+            )
+
     def append_row(self, row_data: Dict[str, Any]) -> None:
         ordered_row = [row_data.get(header, "") for header in self.headers]
         self.pending_rows.append(ordered_row)
+        timestamp_value = row_data.get("timestamp")
+        self.last_appended_timestamp = (
+            str(timestamp_value) if timestamp_value not in (None, "") else None
+        )
         self.unsaved_rows += 1
         if self._should_flush():
             self.flush()
@@ -309,25 +355,30 @@ class ExcelLogger:
         if not self.pending_rows and self.workbook_path.exists():
             return
 
+        rows_to_save = list(self.pending_rows)
+        expected_timestamp = self.last_appended_timestamp
         workbook, worksheet = self._load_or_create_workbook()
         try:
             headers = self._ensure_headers(worksheet)
             if headers != self.headers:
                 self.headers = headers
-            for row in self.pending_rows:
+            for row in rows_to_save:
                 worksheet.append(row)
             self._refresh_sheet_layout(worksheet, self.headers)
             self._save_workbook(workbook)
+            self._verify_last_saved_timestamp(expected_timestamp)
         finally:
             self._close_workbook(workbook)
 
-        self.pending_rows.clear()
-        self.unsaved_rows = 0
+        self.pending_rows = self.pending_rows[len(rows_to_save):]
+        self.unsaved_rows = len(self.pending_rows)
+        self.last_flushed_timestamp = expected_timestamp
         self.last_save_monotonic = time.monotonic()
 
     def close(self) -> None:
         if self.pending_rows:
             self.flush()
+        self._verify_last_saved_timestamp(self.last_appended_timestamp)
 
 
 def ensure_dependencies() -> None:
