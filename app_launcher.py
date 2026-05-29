@@ -1050,6 +1050,9 @@ class ToolLauncherApp:
         self._append_log("命令: {0}".format(" ".join(command)))
 
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        child_env = build_child_process_environment()
+        if tool_name == "liveplot":
+            child_env["SERIAL_LOGGER_MPL_BACKEND"] = "TkAgg"
         try:
             self.process = subprocess.Popen(
                 command,
@@ -1061,7 +1064,7 @@ class ToolLauncherApp:
                 errors="replace",
                 bufsize=1,
                 creationflags=creationflags,
-                env=build_child_process_environment(),
+                env=child_env,
             )
         except OSError as exc:
             self._set_status("{0} 启动失败".format(tool_label))

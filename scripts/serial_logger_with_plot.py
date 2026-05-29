@@ -1021,6 +1021,7 @@ class LivePlotter:
         self.avg_lines: Dict[str, Any] = {}
         self.measurement_pwm_entry: Any = None
         self.measurement_current_entry: Any = None
+        self.interactive_backend = self._supports_interactive_backend()
 
         self.fig, self.ax = plt.subplots(figsize=(12, 6))
         plt.subplots_adjust(top=0.86)
@@ -1057,8 +1058,9 @@ class LivePlotter:
         self.ax.legend(loc="upper right", fontsize=8)
         self.fig.autofmt_xdate()
         plt.ion()
-        if "agg" not in matplotlib.get_backend().lower():
+        if self.interactive_backend:
             plt.show(block=False)
+        self._refresh_canvas()
         self.measurement_var_master = None
         self.measurement_status_var = SimpleStringVar("未开始")
         self.measurement_pwm_var = SimpleStringVar("")
@@ -1094,6 +1096,23 @@ class LivePlotter:
         self.measurement_formula_canvas: Any = None
         self.measurement_formula_axes: List[Any] = []
         self._build_measurement_panel()
+
+    def _supports_interactive_backend(self) -> bool:
+        backend = matplotlib.get_backend().lower()
+        return backend not in {"agg", "pdf", "pgf", "ps", "svg", "template"}
+
+    def _refresh_canvas(self) -> None:
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+        if self.interactive_backend:
+            try:
+                plt.pause(0.001)
+            except Exception:
+                pass
+
+    def set_status(self, message: str) -> None:
+        self.ax.set_title(message)
+        self._refresh_canvas()
 
     def _resolve_measurement_var_master(self) -> Any:
         manager = getattr(self.fig.canvas, "manager", None)
@@ -1580,9 +1599,7 @@ class LivePlotter:
             if name in values:
                 self.tare_buffer[name].append(values[name])
         remaining = max(0.0, self.tare_seconds - elapsed)
-        self.ax.set_title("Taring... ({0:.1f}s remaining)".format(remaining))
-        self.fig.canvas.draw()
-        self.fig.canvas.flush_events()
+        self.set_status("Taring... ({0:.1f}s remaining)".format(remaining))
         if elapsed >= self.tare_seconds:
             for name in self.channel_names:
                 buf = self.tare_buffer.get(name, [])
@@ -1682,8 +1699,7 @@ class LivePlotter:
                 self._active_tare_message(),
             )
         )
-        self.fig.canvas.draw()
-        self.fig.canvas.flush_events()
+        self._refresh_canvas()
 
     def start_measurement(self) -> None:
         try:
@@ -1901,32 +1917,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("实时曲线初始化失败: {0}".format(exc), file=sys.stderr)
         return 1
 
+    print("正在准备实时曲线窗口...")
+    logger: ExcelLogger | None = None
+    client = None
+    try:
+        plotter = LivePlotter(
+            channel_names=[f.name for f in config.fields],
+            window_seconds=args.plot_window,
+            smooth=args.smooth,
+            edition_profile=edition_profile,
+        )
+        plotter.set_status("正在连接串口 {0}...".format(config.port))
+    except Exception as exc:
+        print("实时曲线窗口创建失败: {0}".format(exc), file=sys.stderr)
+        return 1
+
     print("正在连接串口 {0}...".format(config.port))
     print("保存到: {0}".format(config.workbook_path))
     try:
-        client = create_serial_client(config)
-    except Exception as exc:
-        print(format_serial_open_error(config.port, exc), file=sys.stderr)
-        return 1
-    print("Connected.")
+        try:
+            client = create_serial_client(config)
+        except Exception as exc:
+            plotter.set_status("串口连接失败: {0}".format(config.port))
+            print(format_serial_open_error(config.port, exc), file=sys.stderr)
+            return 1
+        print("Connected.")
+        plotter.set_status("已连接 {0}，等待去皮...".format(config.port))
 
-    logger: ExcelLogger | None = None
-    plotter: LivePlotter | None = None
-
-    try:
         logger = ExcelLogger(
             workbook_path=config.workbook_path,
             sheet_name=config.sheet_name,
             field_names=[f.name for f in config.fields],
             autosave_every_rows=config.autosave_every_rows,
             autosave_interval_seconds=config.autosave_interval_seconds,
-        )
-
-        plotter = LivePlotter(
-            channel_names=[f.name for f in config.fields],
-            window_seconds=args.plot_window,
-            smooth=args.smooth,
-            edition_profile=edition_profile,
         )
 
         while True:
@@ -1970,9 +1993,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     finally:
         if logger is not None:
             logger.close()
-        if plotter is not None:
-            plotter.close()
-        client.close()
+        plotter.close()
+        if client is not None:
+            client.close()
     return 0
 
 

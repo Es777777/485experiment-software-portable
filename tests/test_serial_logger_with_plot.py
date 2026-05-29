@@ -259,6 +259,95 @@ class LivePlotterManualTareTests(unittest.TestCase):
             plotter.close()
 
 
+class LivePlotStartupTests(unittest.TestCase):
+    def test_main_initializes_plotter_before_serial_connect(self) -> None:
+        config = serial_logger_with_plot.AppConfig(
+            port="COM404",
+            baudrate=115200,
+            bytesize=8,
+            parity="N",
+            stopbits=1.0,
+            timeout=1.0,
+            slave_id=1,
+            poll_interval_seconds=0.1,
+            inter_request_delay_seconds=0.0,
+            retries=1,
+            workbook_path=Path("logs/test.xlsx"),
+            sheet_name="data",
+            timestamp_format="%Y-%m-%d %H:%M:%S.%f",
+            autosave_every_rows=10,
+            autosave_interval_seconds=2.0,
+            fields=[
+                serial_logger_with_plot.FieldConfig(
+                    name="weight_ch1",
+                    function_code=3,
+                    address=0,
+                    data_type="int32",
+                ),
+                serial_logger_with_plot.FieldConfig(
+                    name="weight_ch2",
+                    function_code=3,
+                    address=2,
+                    data_type="int32",
+                ),
+                serial_logger_with_plot.FieldConfig(
+                    name="weight_ch3",
+                    function_code=3,
+                    address=4,
+                    data_type="int32",
+                ),
+            ],
+        )
+        profile = serial_logger_with_plot.EditionProfile()
+        events = []
+
+        class FakePlotter:
+            def __init__(self, channel_names, window_seconds, smooth, edition_profile) -> None:
+                events.append(
+                    (
+                        "plotter_init",
+                        list(channel_names),
+                        window_seconds,
+                        smooth,
+                        edition_profile.edition_key,
+                    )
+                )
+
+            def set_status(self, message: str) -> None:
+                events.append(("plotter_status", message))
+
+            def close(self) -> None:
+                events.append(("plotter_close",))
+
+        with mock.patch.object(
+            serial_logger_with_plot, "ensure_dependencies"
+        ), mock.patch.object(
+            serial_logger_with_plot,
+            "resolve_config_path",
+            return_value=Path("config/logger_config.json"),
+        ), mock.patch.object(
+            serial_logger_with_plot, "load_config", return_value=config
+        ), mock.patch.object(
+            serial_logger_with_plot, "load_edition_profile", return_value=profile
+        ), mock.patch.object(
+            serial_logger_with_plot, "LivePlotter", FakePlotter
+        ), mock.patch.object(
+            serial_logger_with_plot,
+            "create_serial_client",
+            side_effect=RuntimeError("boom"),
+        ) as serial_ctor:
+            result = serial_logger_with_plot.main(
+                ["--config", "config/logger_config.json", "--once"]
+            )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(events[0][0], "plotter_init")
+        self.assertEqual(events[1], ("plotter_status", "正在连接串口 COM404..."))
+        self.assertIn(("plotter_status", "串口连接失败: COM404"), events)
+        self.assertEqual(events[-1], ("plotter_close",))
+        serial_ctor.assert_called_once()
+
+
 class GroupedMeasurementHelperTests(unittest.TestCase):
     def test_finish_measurement_uses_only_recorded_group_samples(self) -> None:
         state = serial_logger_with_plot.MeasurementSessionState()
