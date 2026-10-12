@@ -1,141 +1,48 @@
-# RS485 Excel Logger
+# 485 实验软件便携版
 
-This project includes two ways to save RS485 serial data into Excel:
+基于 Modbus RTU 的 RS485 实验采集软件。提供 PWM 分组测量、实时曲线、问题反馈等功能。
 
-- `serial_excel_logger.py`: for Modbus RTU request/response devices
-- `serial_raw_excel_logger.py`: for devices that actively send serial data or use a custom frame format
+## 功能亮点
 
-## Files
+- **PWM 分组测量**：在 UI 输入 PWM 字符串，自动写入 Modbus 寄存器（功能码 06），采集一段时间后录入总电流，计算 M_y / M_x / M / θ。
+- **实时曲线**：后台线程读串口，前台 Tk `after()` 调度刷新，画布使用 `draw_idle()`，不卡顿。
+- **统一 xlsx 导出**：分组测量结果与主数据共用同一份 Excel 的不同 sheet（`data` + `measurements`）。
+- **问题反馈**：内置"问题反馈"页签，通过 QQ SMTP 发送反馈到 `koji3527@qq.com`，限流 60 秒/封、20 封/天。
+- **PWM 列写入主表**：live data 的 Excel 表里多出一列 `pwm`，方便后期核对当时下发的 PWM 值。
 
-- `serial_excel_logger.py`: main program
-- `serial_raw_excel_logger.py`: passive serial logger
-- `logger_config.json`: serial port and register settings
-- `raw_logger_config.json`: passive serial logger settings
-- `requirements.txt`: Python dependencies
-- `run_logger.bat`: Windows launcher
-- `run_raw_logger.bat`: passive logger launcher
+## 便携版下载
 
-## Install
+从 [Releases](../../releases) 页面下载最新便携版：
+
+- [485experiment-software-portable-v1.0.2-20260522.zip](../../releases/download/v1.0.2/485experiment-software-portable-v1.0.2-20260522.zip)
+- [485experiment-software-portable-v1.0.3-20260705.zip](../../releases/download/v1.0.3/485experiment-software-portable-v1.0.3-20260705.zip)
+
+便携版已包含 Python 运行时与 PyInstaller 打包的可执行文件，解压后双击 `实验软件.exe` 即可使用。
+
+## PWM 分组测量流程
+
+1. 在主界面"Modbus"页签选好串口、波特率、从站地址。
+2. 切到"PWM 分组测量"页签，输入 PWM 值（例如 `500`），点"开始测量"。
+3. 软件把 PWM 通过 Modbus 功能码 06 写入配置里登记的寄存器，同时启动后台采集。
+4. 等待曲线稳定后，录入"总电流"，点"结束测量"。
+5. 软件自动计算 M_y / M_x / M / θ，可点"下一组"继续测下一个 PWM。
+6. 全部测完后点"导出表格"，结果追加到当前 Excel 的 `measurements` sheet。
+
+## 从源码运行
 
 ```bash
 py -m pip install -r requirements.txt
+py app_launcher.py
 ```
 
-## Configure
+## 目录说明
 
-### 1. Modbus RTU mode
+- `config`：配置（`logger_config.json`、`email.json` 等）
+- `logs`：默认的采集 Excel 输出目录
+- `output`：测量结果与图表输出目录
+- `videos`：视频回填输入目录
+- `docs`：开发文档与发布说明
 
-Edit `logger_config.json` before running:
+## 反馈
 
-- `port`: Windows serial port, for example `COM3`
-- `baudrate`, `parity`, `stopbits`, `bytesize`: must match the transmitter
-- `slave_id`: Modbus device address
-- `poll_interval_seconds`: how often to read the device
-- `workbook_path`: output Excel file path, supports `{start_time}` in the filename
-- `workbook_name_timestamp_format`: filename timestamp format used by `{start_time}`
-- `tare_on_startup`: whether to send the startup tare command automatically
-- `startup_tare_use_reference_mapping`: auto-select the tare register based on the same version mapping used by the desktop software
-- `startup_tare_address`: tare register address, matching the reference desktop software
-- `startup_tare_value`: tare trigger value, matching the reference desktop software
-- `startup_tare_settle_seconds`: wait time after the startup tare command
-- `fields`: the registers you want to save
-
-Each field supports:
-
-- `name`: Excel column name
-- `function_code`: usually `3` or `4`
-- `address`: zero-based Modbus register offset
-- `data_type`: `uint16`, `int16`, `uint32`, `int32`, or `float32`
-- `scale`: optional multiplier
-- `offset`: optional offset after scaling
-- `precision`: optional rounding digits
-- `byte_order`: optional, `big` or `little`
-- `word_order`: optional, `big` or `little`
-
-If your manual shows addresses like `30001` or `40001`, convert them to zero-based offsets first. Example: `30001 -> 0`, `30002 -> 1`.
-
-### 2. Passive raw serial mode
-
-Edit `raw_logger_config.json` if your transmitter sends data by itself or is not Modbus RTU:
-
-- `read_mode`: `chunk` for binary frames, `line` for text lines ending with `\n`
-- `chunk_size`: maximum bytes to read at once in `chunk` mode
-- `encoding`: how to decode bytes into text for the `raw_text` Excel column
-- `workbook_path`: output Excel file path
-
-## Run
-
-### Modbus RTU logger
-
-Read continuously:
-
-```bash
-py -3 serial_excel_logger.py --config logger_config.json
-```
-
-The default config creates one workbook per run, for example `logs/485_weight_data_20260322_200204.xlsx`.
-
-Read once for testing:
-
-```bash
-py -3 serial_excel_logger.py --config logger_config.json --once
-```
-
-On Windows you can also double-click `run_logger.bat`.
-
-### Passive raw logger
-
-Read continuously:
-
-```bash
-py -3 serial_raw_excel_logger.py --config raw_logger_config.json
-```
-
-Read once for testing:
-
-```bash
-py -3 serial_raw_excel_logger.py --config raw_logger_config.json --once
-```
-
-On Windows you can also double-click `run_raw_logger.bat`.
-
-## Excel Output
-
-Modbus workbook columns:
-
-- `timestamp`
-- `unix_time`
-- `port`
-- `baudrate`
-- `slave_id`
-- `status`
-- `error`
-- `raw_frames`
-- one column for each configured field
-
-Passive raw workbook columns:
-
-- `timestamp`
-- `unix_time`
-- `port`
-- `baudrate`
-- `bytesize`
-- `parity`
-- `stopbits`
-- `byte_count`
-- `raw_hex`
-- `raw_text`
-
-## Notes
-
-- This program assumes the transmitter uses Modbus RTU over RS485.
-- If your device uses a custom frame format instead of Modbus RTU, the read logic in `serial_excel_logger.py` needs to be adjusted.
-- If values look wrong, check `baudrate`, `parity`, `stopbits`, `slave_id`, register address, function code, data type, and byte/word order.
-- The default startup tare uses the same desktop-software logic: first read version register `60000`, then send Modbus `06` with value `1` to register `21` or `38` depending on device version.
-
-## Troubleshooting
-
-- If `serial_excel_logger.py` reports `received 0 bytes`, the serial port opened successfully but the device did not reply.
-- Common causes: wrong `slave_id`, wrong `baudrate/parity/stopbits`, A/B wires reversed, missing RS485 converter, or the device is not Modbus RTU.
-- The sample `temperature_c` and `humidity_rh` registers in `logger_config.json` are placeholders. Replace them with your actual manual values.
-- If you are unsure whether the device is Modbus, run `serial_raw_excel_logger.py` first. If that script can receive data but the Modbus script cannot, your device is probably not using the Modbus request/response flow expected here.
+软件内置"问题反馈"页签，可直接发邮件到 `koji3527@qq.com`。发件人需在 `config/email.json` 配置（QQ 邮箱授权码，非登录密码）。

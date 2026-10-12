@@ -1,6 +1,10 @@
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $buildRoot = Join-Path $projectRoot "build"
 $distRoot = Join-Path $projectRoot "dist"
+$releaseVersion = "v1.0.3"
+$releaseStamp = Get-Date -Format "yyyyMMdd"
+$releaseZipBase = "485experiment-software-portable-$releaseVersion-$releaseStamp"
+$releaseZipName = "$releaseZipBase.zip"
 
 Set-Location $projectRoot
 
@@ -32,5 +36,15 @@ foreach ($folderName in @("logs", "output", "videos")) {
 
 Copy-Item -Path (Join-Path $projectRoot "config") -Destination (Join-Path $appDist.FullName "config") -Recurse -Force
 Copy-Item -Path (Join-Path $projectRoot "README_portable.txt") -Destination (Join-Path $appDist.FullName "README.txt") -Force
+if (Test-Path (Join-Path $projectRoot "GROUPED_MEASUREMENT_GUIDE.txt")) {
+    Copy-Item -Path (Join-Path $projectRoot "GROUPED_MEASUREMENT_GUIDE.txt") -Destination (Join-Path $appDist.FullName "GROUPED_MEASUREMENT_GUIDE.txt") -Force
+}
+
+$releaseZipPath = Join-Path $projectRoot $releaseZipName
+if (Test-Path $releaseZipPath) {
+    Remove-Item $releaseZipPath -Force
+}
+Compress-Archive -Path (Join-Path $appDist.FullName "*") -DestinationPath $releaseZipPath -Force
 
 Write-Host "Portable release created at: $($appDist.FullName)"
+Write-Host "Release archive: $releaseZipPath"

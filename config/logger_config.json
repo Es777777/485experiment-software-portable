@@ -42,5 +42,11 @@
   "startup_tare_use_reference_mapping": true,
   "startup_tare_address": 38,
   "startup_tare_value": 1,
-  "startup_tare_settle_seconds": 0.2
+  "startup_tare_settle_seconds": 0.2,
+  "pwm": {
+    "register": 100,
+    "min_value": 0,
+    "max_value": 256,
+    "default_value": 0
+  }
 }

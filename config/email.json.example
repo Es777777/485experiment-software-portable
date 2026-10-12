@@ -1,0 +1,7 @@
+{
+  "_comment": "QQ 邮箱授权码配置示例。复制本文件为 config/email.json（程序会读取），并把 sender 和 auth_code 改为你自己的 QQ 邮箱和 IMAP/SMTP 授权码（不是登录密码）。",
+  "sender": "your_qq@qq.com",
+  "auth_code": "QQ邮箱IMAP/SMTP授权码",
+  "smtp_host": "smtp.qq.com",
+  "smtp_port": 465
+}
