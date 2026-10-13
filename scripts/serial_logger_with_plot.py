@@ -94,11 +94,23 @@ PWM_MEASUREMENT_SHEET_NAME = "measurements"
 
 
 @dataclass(frozen=True)
+class PwmSerialConfig:
+    port: str
+    baudrate: int = 9600
+    bytesize: int = 8
+    parity: str = "N"
+    stopbits: float = 1.0
+    timeout: float = 1.0
+
+
+@dataclass(frozen=True)
 class PwmConfig:
-    register: int
+    register: Optional[int] = None
     min_value: int = 0
     max_value: int = 256
     default_value: int = 0
+    slave_id: int = 1
+    serial: Optional[PwmSerialConfig] = None
 
     def clamp(self, value: int) -> int:
         if value < self.min_value:
@@ -108,7 +120,7 @@ class PwmConfig:
         return value
 
     def is_configured(self) -> bool:
-        return self.register is not None
+        return self.register is not None or self.serial is not None
 
 
 @dataclass(frozen=True)
@@ -305,7 +317,23 @@ def _parse_pwm_config(payload: Any) -> Optional[PwmConfig]:
     if not isinstance(payload, dict):
         raise ValueError("config 'pwm' must be an object")
     register_value = payload.get("register", None)
-    if register_value is None:
+    serial_payload = payload.get("port", None)
+    serial_cfg: Optional[PwmSerialConfig] = None
+    if serial_payload is not None:
+        if isinstance(serial_payload, str):
+            serial_cfg = PwmSerialConfig(port=serial_payload.strip())
+        elif isinstance(serial_payload, dict):
+            serial_cfg = PwmSerialConfig(
+                port=str(serial_payload.get("device") or serial_payload.get("port", "")).strip(),
+                baudrate=int(serial_payload.get("baudrate", 9600)),
+                bytesize=int(serial_payload.get("bytesize", 8)),
+                parity=str(serial_payload.get("parity", "N")).upper(),
+                stopbits=float(serial_payload.get("stopbits", 1.0)),
+                timeout=float(serial_payload.get("timeout", 1.0)),
+            )
+        else:
+            raise ValueError("config 'pwm.port' must be a string or object")
+    if register_value is None and serial_cfg is None:
         return None
     min_value = int(payload.get("min_value", 0))
     max_value = int(payload.get("max_value", 256))
@@ -314,10 +342,12 @@ def _parse_pwm_config(payload: Any) -> Optional[PwmConfig]:
     default_value = int(payload.get("default_value", min_value))
     default_value = max(min_value, min(default_value, max_value))
     return PwmConfig(
-        register=int(register_value),
+        register=int(register_value) if register_value is not None else None,
         min_value=min_value,
         max_value=max_value,
         default_value=default_value,
+        slave_id=int(payload.get("slave_id", 1)),
+        serial=serial_cfg,
     )
 
 
@@ -1230,9 +1260,45 @@ class LivePlotter:
             return True
         from scripts.serial_excel_logger import write_single_register_with_retries
 
-        client_factory = getattr(self, "_serial_client_factory", None)
-        client = self._serial_client if client_factory is None else None
-        config = self._app_config
+        # 优先使用独立 PWM 串口；缺省时回退到 485 客户端（兼容旧设备）
+        pwm_client = getattr(self, "_pwm_serial_client", None)
+        pwm_serial_cfg = self.pwm_config.serial
+        if pwm_client is not None and pwm_serial_cfg is not None:
+            client = pwm_client
+            parity_letter = {
+                "N": "N",
+                "E": "E",
+                "O": "O",
+                "M": "M",
+                "S": "S",
+            }
+            try:
+                parity_value = parity_letter[pwm_client.parity]
+            except (KeyError, AttributeError):
+                parity_value = "N"
+            config = AppConfig(
+                port=pwm_client.port,
+                baudrate=pwm_client.baudrate,
+                bytesize=pwm_client.bytesize,
+                parity=parity_value,
+                stopbits=float(pwm_client.stopbits),
+                timeout=pwm_client.timeout,
+                slave_id=self.pwm_config.slave_id,
+                poll_interval_seconds=0.0,
+                inter_request_delay_seconds=0.0,
+                retries=1,
+                workbook_path=Path(""),
+                sheet_name="",
+                timestamp_format="",
+                autosave_every_rows=0,
+                autosave_interval_seconds=0.0,
+                fields=[],
+                pwm=None,
+            )
+        else:
+            client_factory = getattr(self, "_serial_client_factory", None)
+            client = self._serial_client if client_factory is None else None
+            config = self._app_config
         if client is None or config is None:
             self.last_pwm_value = value
             return True
@@ -1244,13 +1310,24 @@ class LivePlotter:
                 value=value,
             )
         except Exception as exc:
-            messagebox.showwarning(
-                "PWM 写入失败",
-                "Modbus 写入寄存器 {0} 失败：{1}\n"
-                "请检查接线或寄存器地址是否正确；本次测量仍按输入值继续。".format(
-                    self.pwm_config.register, exc
-                ),
-            )
+            register = self.pwm_config.register
+            if pwm_client is not None and pwm_serial_cfg is not None:
+                messagebox.showwarning(
+                    "PWM 写入失败",
+                    "PWM 串口 {0} 写入寄存器 {1} 失败：{2}\n"
+                    "请检查 PWM 串口接线、波特率或寄存器地址是否正确；"
+                    "本次测量仍按输入值继续。".format(
+                        pwm_serial_cfg.port, register, exc
+                    ),
+                )
+            else:
+                messagebox.showwarning(
+                    "PWM 写入失败",
+                    "Modbus 写入寄存器 {0} 失败：{1}\n"
+                    "请检查接线或寄存器地址是否正确；本次测量仍按输入值继续。".format(
+                        register, exc
+                    ),
+                )
             return False
         self.last_pwm_value = value
         return True
@@ -2065,7 +2142,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--config", default="config/logger_config.json", help="Config file path."
     )
     parser.add_argument(
-        "--port", help="Override serial port from config, for example COM4."
+        "--port", help="Override 485 serial port from config, for example COM4."
+    )
+    parser.add_argument(
+        "--pwm-port",
+        help="Override PWM serial port from config (independent COM for PWM).",
     )
     parser.add_argument(
         "--plot-window", type=int, default=60, help="Plot time window in seconds."
@@ -2115,6 +2196,31 @@ def format_serial_open_error(port: str, exc: BaseException) -> str:
     ).format(port, exc)
 
 
+def create_pwm_client(cfg: PwmSerialConfig):
+    """Open an independent serial client for PWM output (separate COM)."""
+    assert serial is not None
+    parity_map = {
+        "N": serial.PARITY_NONE,
+        "E": serial.PARITY_EVEN,
+        "O": serial.PARITY_ODD,
+        "M": serial.PARITY_MARK,
+        "S": serial.PARITY_SPACE,
+    }
+    stopbits_map = {
+        1.0: serial.STOPBITS_ONE,
+        1.5: serial.STOPBITS_ONE_POINT_FIVE,
+        2.0: serial.STOPBITS_TWO,
+    }
+    return serial.Serial(
+        port=cfg.port,
+        baudrate=cfg.baudrate,
+        bytesize=cfg.bytesize,
+        parity=parity_map[cfg.parity],
+        stopbits=stopbits_map[cfg.stopbits],
+        timeout=cfg.timeout,
+    )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     configure_text_streams()
     parser = build_parser()
@@ -2127,6 +2233,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         edition_profile = load_edition_profile(get_config_runtime_base(config_path))
         if args.port:
             config = replace(config, port=str(args.port).strip())
+        if args.pwm_port and config.pwm is not None:
+            config = replace(
+                config,
+                pwm=replace(
+                    config.pwm,
+                    serial=PwmSerialConfig(port=str(args.pwm_port).strip()),
+                ),
+            )
     except Exception as exc:
         print("实时曲线初始化失败: {0}".format(exc), file=sys.stderr)
         return 1
@@ -2134,6 +2248,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print("正在准备实时曲线窗口...")
     logger: ExcelLogger | None = None
     client = None
+    pwm_client = None
     plotter = None
     result = 0
     try:
@@ -2162,6 +2277,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             except Exception:
                 pass
             return 1
+        if config.pwm is not None and config.pwm.serial is not None:
+            try:
+                pwm_client = create_pwm_client(config.pwm.serial)
+                print("PWM 串口已连接: {0}".format(config.pwm.serial.port))
+            except Exception as exc:
+                print(format_serial_open_error(config.pwm.serial.port, exc), file=sys.stderr)
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                try:
+                    plotter.close()
+                except Exception:
+                    pass
+                return 1
         print("Connected.")
         plotter.set_status("已连接 {0}，等待去皮...".format(config.port))
 
@@ -2176,6 +2306,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         plotter._app_config = config  # type: ignore[attr-defined]
         plotter._plot_fields = config.fields  # type: ignore[attr-defined]
         plotter._serial_client = client  # type: ignore[attr-defined]
+        plotter._pwm_serial_client = pwm_client  # type: ignore[attr-defined]
 
         if args.once:
             row_data = poll_once(client, config, logger)
@@ -2263,6 +2394,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 client.close()
             except Exception as exc:
                 print("Failed to close serial client: {0}".format(exc), file=sys.stderr)
+                result = 1
+        if pwm_client is not None:
+            try:
+                pwm_client.close()
+            except Exception as exc:
+                print("Failed to close PWM client: {0}".format(exc), file=sys.stderr)
                 result = 1
     return result
 

@@ -233,7 +233,6 @@ class CooldownInfoTests(unittest.TestCase):
         self.assertEqual(sent, 0)
         self.assertEqual(limit, email_feedback.RATE_LIMIT_MAX_PER_DAY)
         self.assertEqual(cooldown, 0.0)
-
     def test_cooldown_decreases_with_time(self) -> None:
         from scripts import email_feedback as ef
         today = ef.time.strftime("%Y-%m-%d")

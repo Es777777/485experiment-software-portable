@@ -1652,6 +1652,92 @@ class PwmConfigTests(unittest.TestCase):
             config = mod.load_config(cfg_path)
             self.assertIsNone(config.pwm)
 
+    def test_pwm_serial_config_parses_string_port(self) -> None:
+        from scripts import serial_logger_with_plot as mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "logger_config.json"
+            cfg_path.write_text(
+                """
+{
+  "port": "COM3",
+  "baudrate": 115200,
+  "bytesize": 8,
+  "parity": "N",
+  "stopbits": 1,
+  "timeout": 1.0,
+  "slave_id": 1,
+  "poll_interval_seconds": 0.1,
+  "inter_request_delay_seconds": 0.0,
+  "retries": 1,
+  "autosave_every_rows": 10,
+  "autosave_interval_seconds": 2.0,
+  "workbook_path": "logs/x_{start_time}.xlsx",
+  "workbook_name_timestamp_format": "%Y%m%d_%H%M%S",
+  "sheet_name": "data",
+  "timestamp_format": "%Y-%m-%d %H:%M:%S",
+  "fields": [
+    {"name": "w", "function_code": 3, "address": 0, "data_type": "int32", "word_order": "little"}
+  ],
+  "pwm": {"register": 100, "port": "COM5"}
+}
+""",
+                encoding="utf-8",
+            )
+            config = mod.load_config(cfg_path)
+            self.assertIsNotNone(config.pwm)
+            self.assertIsNotNone(config.pwm.serial)
+            self.assertEqual(config.pwm.serial.port, "COM5")
+            # Defaults filled in
+            self.assertEqual(config.pwm.serial.baudrate, 9600)
+            self.assertEqual(config.pwm.serial.parity, "N")
+            self.assertEqual(config.pwm.serial.bytesize, 8)
+            self.assertEqual(config.pwm.serial.stopbits, 1.0)
+            self.assertEqual(config.pwm.serial.timeout, 1.0)
+
+    def test_pwm_serial_config_parses_object_port(self) -> None:
+        from scripts import serial_logger_with_plot as mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "logger_config.json"
+            cfg_path.write_text(
+                """
+{
+  "port": "COM3",
+  "baudrate": 115200,
+  "bytesize": 8,
+  "parity": "N",
+  "stopbits": 1,
+  "timeout": 1.0,
+  "slave_id": 1,
+  "poll_interval_seconds": 0.1,
+  "inter_request_delay_seconds": 0.0,
+  "retries": 1,
+  "autosave_every_rows": 10,
+  "autosave_interval_seconds": 2.0,
+  "workbook_path": "logs/x_{start_time}.xlsx",
+  "workbook_name_timestamp_format": "%Y%m%d_%H%M%S",
+  "sheet_name": "data",
+  "timestamp_format": "%Y-%m-%d %H:%M:%S",
+  "fields": [
+    {"name": "w", "function_code": 3, "address": 0, "data_type": "int32", "word_order": "little"}
+  ],
+  "pwm": {
+    "register": 100,
+    "port": {"device": "COM9", "baudrate": 19200, "parity": "E", "stopbits": 2.0}
+  }
+}
+""",
+                encoding="utf-8",
+            )
+            config = mod.load_config(cfg_path)
+            self.assertIsNotNone(config.pwm)
+            self.assertIsNotNone(config.pwm.serial)
+            self.assertEqual(config.pwm.serial.port, "COM9")
+            self.assertEqual(config.pwm.serial.baudrate, 19200)
+            self.assertEqual(config.pwm.serial.parity, "E")
+            self.assertEqual(config.pwm.serial.stopbits, 2.0)
+
 
 class LivePlotterPwmWriteTests(unittest.TestCase):
     def _build_plotter(self) -> serial_logger_with_plot.LivePlotter:
@@ -1707,6 +1793,94 @@ class LivePlotterPwmWriteTests(unittest.TestCase):
         self.assertTrue(ok)
         write_mock.assert_not_called()
         self.assertEqual(plotter.last_pwm_value, 64)
+
+    def test_write_pwm_uses_dedicated_pwm_client_when_available(self) -> None:
+        from scripts import serial_excel_logger
+
+        plotter = self._build_plotter()
+        pwm_serial_cfg = serial_logger_with_plot.PwmSerialConfig(
+            port="COM5", baudrate=9600
+        )
+        plotter.set_pwm_config(
+            serial_logger_with_plot.PwmConfig(
+                register=100,
+                min_value=0,
+                max_value=256,
+                slave_id=2,
+                serial=pwm_serial_cfg,
+            )
+        )
+        # Two distinct mock serial clients
+        pwm_client = mock.MagicMock()
+        pwm_client.port = "COM5"
+        pwm_client.baudrate = 9600
+        pwm_client.bytesize = 8
+        pwm_client.parity = "N"
+        pwm_client.stopbits = 1.0
+        pwm_client.timeout = 1.0
+        modbus_client = mock.MagicMock()
+        plotter._pwm_serial_client = pwm_client  # type: ignore[attr-defined]
+        plotter._serial_client = modbus_client  # type: ignore[attr-defined]
+        plotter._app_config = mock.MagicMock()  # type: ignore[attr-defined]
+        plotter._app_config.slave_id = 99
+        with mock.patch.object(
+            serial_excel_logger,
+            "write_single_register_with_retries",
+            return_value=(0, b""),
+        ) as write_mock:
+            with mock.patch(
+                "tkinter.messagebox.showwarning"
+            ) as warn_mock:
+                ok = plotter.write_pwm_value(200)
+        self.assertTrue(ok)
+        write_mock.assert_called_once()
+        # The client passed should be the dedicated PWM client, not the 485 client
+        args, kwargs = write_mock.call_args
+        passed_client = kwargs.get("client") or (args[0] if args else None)
+        self.assertIs(passed_client, pwm_client)
+        self.assertIsNot(passed_client, modbus_client)
+        warn_mock.assert_not_called()
+        # last_pwm_value was updated
+        self.assertEqual(plotter.last_pwm_value, 200)
+
+    def test_write_pwm_warns_when_pwm_client_fails(self) -> None:
+        from scripts import serial_excel_logger
+
+        plotter = self._build_plotter()
+        plotter.set_pwm_config(
+            serial_logger_with_plot.PwmConfig(
+                register=200,
+                min_value=0,
+                max_value=256,
+                slave_id=1,
+                serial=serial_logger_with_plot.PwmSerialConfig(port="COM7"),
+            )
+        )
+        pwm_client = mock.MagicMock()
+        pwm_client.port = "COM7"
+        pwm_client.baudrate = 9600
+        pwm_client.bytesize = 8
+        pwm_client.parity = "N"
+        pwm_client.stopbits = 1.0
+        pwm_client.timeout = 1.0
+        plotter._pwm_serial_client = pwm_client  # type: ignore[attr-defined]
+        plotter._serial_client = mock.MagicMock()  # type: ignore[attr-defined]
+        plotter._app_config = mock.MagicMock()  # type: ignore[attr-defined]
+        with mock.patch.object(
+            serial_excel_logger,
+            "write_single_register_with_retries",
+            side_effect=RuntimeError("port closed"),
+        ):
+            with mock.patch(
+                "tkinter.messagebox.showwarning"
+            ) as warn_mock:
+                ok = plotter.write_pwm_value(50)
+        self.assertFalse(ok)
+        warn_mock.assert_called_once()
+        message = warn_mock.call_args[0][1]
+        self.assertIn("COM7", message)
+        # last_pwm_value should NOT have been updated
+        self.assertNotEqual(plotter.last_pwm_value, 50)
 
 
 class ExcelLoggerPwmHeaderTests(unittest.TestCase):

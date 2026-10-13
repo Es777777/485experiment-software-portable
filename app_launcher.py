@@ -245,6 +245,7 @@ class ToolLauncherApp:
         self.stop_buttons: list[ttk.Button] = []
         self.modbus_detected_ports: list[str] = []
         self.raw_detected_ports: list[str] = []
+        self.pwm_detected_ports: list[str] = []
         self.status_var = tk.StringVar(value="就绪")
         self.status_badge_var: tk.StringVar | None = None
         self.status_badge_label: tk.Label | None = None
@@ -265,6 +266,9 @@ class ToolLauncherApp:
         self.raw_once_var = tk.BooleanVar(value=False)
         self.raw_port_combo: ttk.Combobox | None = None
 
+        self.pwm_port_var = tk.StringVar(value="")
+        self.pwm_port_combo: ttk.Combobox | None = None
+
         self.video_dir_var = tk.StringVar(value=str(self.app_root / "videos"))
         self.excel_dir_var = tk.StringVar(value=str(self.app_root / "logs"))
         self.video_output_var = tk.StringVar(value="")
@@ -282,8 +286,10 @@ class ToolLauncherApp:
         self._build_ui()
         self.refresh_serial_ports("modbus", log_results=False)
         self.refresh_serial_ports("raw", log_results=False)
+        self.refresh_serial_ports("pwm", log_results=False)
         self.use_config_port("modbus", prefer_detected=True, log_results=False)
         self.use_config_port("raw", prefer_detected=True, log_results=False)
+        self.use_config_port("pwm", prefer_detected=True, log_results=False)
         self.root.after(120, self._poll_log_queue)
 
     def _build_ui(self) -> None:
@@ -553,19 +559,22 @@ class ToolLauncherApp:
             file_types=[("JSON", "*.json"), ("All files", "*.*")],
         )
         self.modbus_port_combo = self._add_port_override_row(
-            parent, start_row + 1, "临时串口", self.modbus_port_var, "modbus"
+            parent, start_row + 1, "485 串口", self.modbus_port_var, "modbus"
+        )
+        self.pwm_port_combo = self._add_port_override_row(
+            parent, start_row + 2, "PWM 串口", self.pwm_port_var, "pwm"
         )
         ttk.Checkbutton(
             parent, text="只采集一次后退出", variable=self.modbus_once_var
         ).grid(
-            row=start_row + 2,
+            row=start_row + 3,
             column=1,
             sticky="w",
             pady=(4, 10),
         )
 
         live_row = ttk.Frame(parent)
-        live_row.grid(row=start_row + 3, column=1, sticky="ew", pady=(0, 10))
+        live_row.grid(row=start_row + 4, column=1, sticky="ew", pady=(0, 10))
         ttk.Label(live_row, text="实时窗口秒数").grid(row=0, column=0, sticky="w")
         ttk.Entry(live_row, textvariable=self.live_plot_window_var, width=8).grid(
             row=0, column=1, sticky="w", padx=(8, 16)
@@ -580,14 +589,14 @@ class ToolLauncherApp:
             wraplength=build_launcher_layout_metrics()["tab_intro_wrap"],
             justify="left",
         ).grid(
-            row=start_row + 4,
+            row=start_row + 5,
             column=1,
             sticky="ew",
             pady=(0, 10),
         )
 
         actions = ttk.Frame(parent)
-        actions.grid(row=start_row + 5, column=1, sticky="ew")
+        actions.grid(row=start_row + 6, column=1, sticky="ew")
         start_button = ttk.Button(
             actions, text="开始普通采集", command=self.start_modbus
         )
@@ -957,6 +966,12 @@ class ToolLauncherApp:
         row.grid_columnconfigure(0, weight=1)
         row.grid_columnconfigure(1, weight=1)
         row.grid_columnconfigure(2, weight=1)
+        if target == "modbus":
+            self.modbus_port_combo = combo
+        elif target == "raw":
+            self.raw_port_combo = combo
+        elif target == "pwm":
+            self.pwm_port_combo = combo
         return combo
 
     def _add_path_row(
@@ -1063,28 +1078,56 @@ class ToolLauncherApp:
     def _set_detected_ports(self, target: str, ports: list[str]) -> None:
         if target == "modbus":
             self.modbus_detected_ports = ports
-        else:
+        elif target == "raw":
             self.raw_detected_ports = ports
+        elif target == "pwm":
+            self.pwm_detected_ports = ports
 
     def _detected_ports_for(self, target: str) -> list[str]:
-        return (
-            self.modbus_detected_ports
-            if target == "modbus"
-            else self.raw_detected_ports
-        )
+        if target == "modbus":
+            return self.modbus_detected_ports
+        if target == "raw":
+            return self.raw_detected_ports
+        if target == "pwm":
+            return self.pwm_detected_ports
+        return []
+
+    def _combo_for(self, target: str) -> ttk.Combobox | None:
+        if target == "modbus":
+            return self.modbus_port_combo
+        if target == "raw":
+            return self.raw_port_combo
+        if target == "pwm":
+            return self.pwm_port_combo
+        return None
+
+    def _port_var_for(self, target: str) -> tk.StringVar:
+        if target == "modbus":
+            return self.modbus_port_var
+        if target == "raw":
+            return self.raw_port_var
+        if target == "pwm":
+            return self.pwm_port_var
+        raise ValueError("Unknown target: {0}".format(target))
 
     def _load_config_port(self, config_path: Path) -> str:
         try:
             payload = json.loads(config_path.read_text(encoding="utf-8"))
         except Exception:
             return ""
+        if isinstance(payload, dict):
+            pwm_block = payload.get("pwm")
+            if isinstance(pwm_block, dict):
+                port_value = str(pwm_block.get("port", "")).strip()
+                if port_value:
+                    return port_value
         return str(payload.get("port", "")).strip()
 
     def refresh_serial_ports(self, target: str, log_results: bool = True) -> None:
         ports = self._scan_serial_ports()
         self._set_detected_ports(target, ports)
-        combo = self.modbus_port_combo if target == "modbus" else self.raw_port_combo
-        variable = self.modbus_port_var if target == "modbus" else self.raw_port_var
+        combo = self._combo_for(target)
+        variable = self._port_var_for(target)
         current = variable.get().strip()
 
         values = list(ports)
@@ -1108,11 +1151,14 @@ class ToolLauncherApp:
         prefer_detected: bool = False,
         log_results: bool = True,
     ) -> None:
-        config_var = (
-            self.modbus_config_var if target == "modbus" else self.raw_config_var
-        )
-        port_var = self.modbus_port_var if target == "modbus" else self.raw_port_var
-        combo = self.modbus_port_combo if target == "modbus" else self.raw_port_combo
+        if target == "modbus":
+            config_var = self.modbus_config_var
+        elif target == "raw":
+            config_var = self.raw_config_var
+        else:
+            config_var = self.modbus_config_var  # PWM 沿用 modbus 配置文件
+        port_var = self._port_var_for(target)
+        combo = self._combo_for(target)
 
         config_path = Path(config_var.get().strip())
         if not config_path.exists():
@@ -1145,7 +1191,7 @@ class ToolLauncherApp:
 
     def _resolve_port_override(self, target: str, config_path: Path) -> str | None:
         self.refresh_serial_ports(target, log_results=False)
-        port_var = self.modbus_port_var if target == "modbus" else self.raw_port_var
+        port_var = self._port_var_for(target)
         selected_port = port_var.get().strip()
         config_port = self._load_config_port(config_path)
         effective_port = selected_port or config_port
@@ -1316,6 +1362,10 @@ class ToolLauncherApp:
             return
         if port:
             args.extend(["--port", port])
+
+        pwm_port = self._resolve_port_override("pwm", config_path)
+        if pwm_port:
+            args.extend(["--pwm-port", pwm_port])
 
         plot_window = self.live_plot_window_var.get().strip()
         try:

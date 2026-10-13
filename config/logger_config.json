@@ -47,6 +47,12 @@
     "register": 100,
     "min_value": 0,
     "max_value": 256,
-    "default_value": 0
+    "default_value": 0,
+    "port": "COM5",
+    "baudrate": 9600,
+    "bytesize": 8,
+    "parity": "N",
+    "stopbits": 1,
+    "timeout": 1.0
   }
 }
