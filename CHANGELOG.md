@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.4
+
+- 双 COM 串口：485 采集与 PWM 输出在代码与启动器中拆为两路独立串口（`PwmSerialConfig` + 启动器新增 "PWM 串口" 下拉 + CLI `--pwm-port` 覆盖）
+- 说明书新增 "串口选型（双 COM）与设备管理器排查" 章节，含两个 COM 编号的差异、设备管理器查找步骤、串口驱动（CH340/FTDI/CP210x）安装、串口占用排查
+- 说明书封面新增邮箱 `koji3527@qq.com`，页脚新增 GitHub 水印 `github.com/Es777777/485experiment-software-portable`
+- 4 张关键截图重拍 + 重新标注，启动器标注新增 "PWM 串口" 红框
+- 邮件每日上限从 20 封降到 8 封（沿用上一 commit）
+
 ## v1.0.3
 
 - PWM Modbus 写入：分组测量输入的 PWM 值通过功能码 06 写到 `logger_config.json` 里登记的寄存器

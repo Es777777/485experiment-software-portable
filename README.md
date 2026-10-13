@@ -14,8 +14,9 @@
 
 从 [Releases](../../releases) 页面下载最新便携版：
 
+- [485experiment-software-portable-v1.0.4-20261013.zip](../../releases/download/v1.0.4/485experiment-software-portable-v1.0.4-20261013.zip)
+- [485experiment-software-portable-v1.0.3-20261013.zip](../../releases/download/v1.0.3/485experiment-software-portable-v1.0.3-20261013.zip)
 - [485experiment-software-portable-v1.0.2-20260522.zip](../../releases/download/v1.0.2/485experiment-software-portable-v1.0.2-20260522.zip)
-- [485experiment-software-portable-v1.0.3-20260705.zip](../../releases/download/v1.0.3/485experiment-software-portable-v1.0.3-20260705.zip)
 
 便携版已包含 Python 运行时与 PyInstaller 打包的可执行文件，解压后双击 `实验软件.exe` 即可使用。
 

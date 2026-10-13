@@ -29,7 +29,7 @@
 \cfoot{\thepage \quad / \quad \url{https://github.com/Es777777/485experiment-software-portable}}
 \rfoot{}
 
-\title{\textbf{实验软件操作说明书}\\v1.0.3 便携版细化操作版\\
+\title{\textbf{实验软件操作说明书}\\v1.0.4 便携版细化操作版\\
 \large 维护者邮箱：\texttt{koji3527@qq.com}\quad (每日上限 8 封，间隔 60 秒)\\
 \large 项目主页：\url{https://github.com/Es777777/485experiment-software-portable}}
 \author{}
@@ -54,8 +54,8 @@
 本文档基于当前已核对的远端最新主线版本整理：
 \begin{itemize}[leftmargin=2em]
   \item GitHub 远端主线：\texttt{origin/main}
-  \item 当前发布版本：\texttt{v1.0.3}
-  \item 便携版压缩包：\texttt{485experiment-software-portable-v1.0.3-20261013.zip}
+  \item 当前发布版本：\texttt{v1.0.4}
+  \item 便携版压缩包：\texttt{485experiment-software-portable-v1.0.4-20261013.zip}
   \item 反馈邮箱：\texttt{koji3527@qq.com}（每日上限 8 封，间隔 60 秒）
 \end{itemize}
 
@@ -82,7 +82,7 @@
 
 \subsection{串口选型（双 COM）与设备管理器排查}
 
-本软件需要\textbf{两路独立的 USB 串口}（v1.0.3 新增）。开始前请先把硬件
+本软件需要\textbf{两路独立的 USB 串口}（v1.0.4 新增）。开始前请先把硬件
 接好，再在系统层面确认每路串口实际对应的 COM 编号。
 
 \subsubsection{两个 COM 口的区别}
@@ -127,7 +127,7 @@
         串口调试助手等）；
   \item 一次只能一个进程打开同一个 COM 口；
   \item 不确定是哪个进程占用：在 PowerShell 运行
-        \texttt{Get-Process | Where-Object \{\$_.Modules.FileName -like '*python*'\}}，
+        \texttt{Get-Process | Where-Object \{\$\_.Modules.FileName -like '*python*'\}}，
         看哪些 python 进程在跑；
   \item 还是不行就拔插一次 USB，让操作系统重新分配资源。
 \end{enumerate}
@@ -228,13 +228,13 @@ py app_launcher.py
   \caption{实时曲线与分组测量界面（红色框标注：实时曲线窗口、测量操作面板、历史测量记录）}
 \end{figure}
 
-\subsection{便携版（v1.0.3）使用说明}
+\subsection{便携版（v1.0.4）使用说明}
 
 便携版不依赖 Python，下载解压后即可运行：
 
 \begin{enumerate}[leftmargin=2em]
   \item 在 GitHub Releases 页面下载
-        \texttt{485experiment-software-portable-v1.0.3-20261013.zip}；
+        \texttt{485experiment-software-portable-v1.0.4-20261013.zip}；
   \item 解压到任意目录（路径不要含中文或空格以外的特殊字符）；
   \item 双击 \texttt{实验软件.exe} 启动；
   \item 第一次启动若弹出权限提示，同意即可；
@@ -247,7 +247,7 @@ py app_launcher.py
   \caption{便携版软件主界面（红色框标注：解压后双击运行的主窗口）}
 \end{figure}
 
-\subsection{问题反馈（v1.0.3 新增）}
+\subsection{问题反馈（v1.0.4 新增）}
 
 启动器底部新增“问题反馈”页签，可将实验中发现的问题直接发到维护者邮箱。
 
@@ -489,9 +489,9 @@ py app_launcher.py
   \item 一旦更换硬件或固件，先重新核对寄存器映射。
 \end{enumerate}
 
-\section{本次更新内容（v1.0.3）}
+\section{本次更新内容（v1.0.4）}
 
-本次更新相对 v1.0.2 主要增加了：
+本次更新相对 v1.0.4 主要增加了：
 
 \begin{itemize}[leftmargin=2em]
   \item \textbf{双 COM 串口}：485 采集串口与 PWM 输出串口在代码与启动器中拆成
@@ -527,7 +527,7 @@ py app_launcher.py
   \item \texttt{manual\_assets/annotated/live\_plot\_moment\_panel\_annotated.png}
   \item \texttt{manual\_assets/annotated/moment\_formula\_panel\_annotated.png}
   \item \texttt{manual\_assets/annotated/portable\_exe\_main\_annotated.png}
-  \item \texttt{RELEASE\_NOTES\_v1.0.3.md}
+  \item \texttt{RELEASE\_NOTES\_v1.0.4.md}
 \end{itemize}
 
 \end{document}

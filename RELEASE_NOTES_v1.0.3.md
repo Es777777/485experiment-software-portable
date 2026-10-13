@@ -12,11 +12,6 @@
 
 - 邮件每日上限从 20 封降到 8 封
 
-## 已知问题 / 下一版预告
-
-- **双 COM 拆分**：485 采集与 PWM 输出在 main 分支已拆为两路独立串口（`PwmSerialConfig` + 启动器新增"PWM 串口"下拉），`config/logger_config.json` 的 `pwm.port` 字段可独立配置，CLI 也支持 `--pwm-port` 覆盖。v1.0.3 zip 仍为旧单 COM 行为；下次发版（v1.0.4）生效。
-- 详细设备管理器排查 COM 编号的步骤已写进 `实验软件说明书_20260705.pdf` 的“串口选型（双 COM）与设备管理器排查”章节。
-
 ## 下载
 
 便携版 zip：[485experiment-software-portable-v1.0.3-20261013.zip](https://github.com/Es777777/485experiment-software-portable/releases/download/v1.0.3/485experiment-software-portable-v1.0.3-20261013.zip)
