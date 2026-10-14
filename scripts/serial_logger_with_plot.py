@@ -1343,6 +1343,12 @@ class LivePlotter:
             return row
 
     def submit_live_row(self, row: Dict[str, Any]) -> None:
+        # Guard against the reader thread outliving the plotter (e.g. user closed
+        # the window mid-read).  Without this the daemon would touch fields that
+        # are mid-Tk teardown and trigger "invalid command name" / TclError that
+        # bring the whole process down.
+        if self._stop_event is not None and self._stop_event.is_set():
+            return
         if self.pwm_config is not None and self.pwm_config.is_configured():
             row = dict(row)
             row[PWM_DATA_FIELD_NAME] = self.current_pwm
@@ -2343,7 +2349,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         print("读串口失败: {0}".format(exc), file=sys.stderr)
                         time.sleep(config.poll_interval_seconds)
                         continue
-                    plotter.submit_live_row(row_data)
+                    try:
+                        plotter.submit_live_row(row_data)
+                    except Exception as exc:
+                        # Plotter may already be torn down (user closed the
+                        # window mid-read).  Log and exit the reader loop
+                        # cleanly instead of crashing the whole process.
+                        print("提交采样失败: {0}".format(exc), file=sys.stderr)
+                        return
                     print(
                         "[{0}] {1} | {2}".format(
                             row_data["timestamp"],
